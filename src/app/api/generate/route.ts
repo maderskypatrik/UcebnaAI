@@ -38,7 +38,10 @@ export async function POST(request: Request) {
     }
     if (error instanceof Anthropic.APIError) {
       console.error("Claude API error", error.status, error.message);
-      return Response.json({ error: "Generování se nepovedlo, zkuste to znovu." }, { status: 502 });
+      return Response.json(
+        { error: `Generování se nepovedlo (chyba ${error.status ?? "spojení"}: ${error.message})` },
+        { status: 502 },
+      );
     }
     const message = error instanceof Error ? error.message : "Neznámá chyba.";
     return Response.json({ error: message }, { status: 400 });
