@@ -73,3 +73,13 @@ body {
   color: var(--color-on-surface);
   font-family: var(--font-sans);
 }
+
+@media print {
+  @page {
+    size: A4;
+    margin: 18mm;
+  }
+  body {
+    background: #ffffff;
+  }
+}
