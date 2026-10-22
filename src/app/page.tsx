@@ -4,7 +4,7 @@ import { LessonWizard } from "@/components/LessonWizard";
 export default function Home() {
   return (
     <div className="min-h-screen">
-      <header className="flex items-center justify-between px-6 py-6 sm:px-10">
+      <header className="print:hidden flex items-center justify-between px-6 py-6 sm:px-10">
         <span className="font-display text-title-lg font-bold text-primary-container">
           Učebna.ai
         </span>
@@ -21,8 +21,8 @@ export default function Home() {
         </nav>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 pb-16 pt-6 sm:px-6">
-        <div className="mb-10 px-2">
+      <main className="mx-auto max-w-4xl px-4 pb-16 pt-6 sm:px-6 print:max-w-none print:p-0">
+        <div className="mb-10 px-2 print:hidden">
           <h1 className="font-display text-display-sm font-bold text-on-surface">
             Dobrý den, pane učiteli
           </h1>
@@ -31,7 +31,7 @@ export default function Home() {
           </p>
         </div>
 
-        <section className="rounded-xl bg-surface-container-lowest px-6 py-10 shadow-ambient sm:px-12">
+        <section className="rounded-xl bg-surface-container-lowest px-6 py-10 shadow-ambient sm:px-12 print:p-0 print:shadow-none">
           <LessonWizard />
         </section>
       </main>

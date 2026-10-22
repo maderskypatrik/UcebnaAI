@@ -1,11 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import type { GenerateResult } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
+import { Sheet } from "./Sheet";
 
 const STEPS = ["Škola a předmět", "Podklady", "Výstup"] as const;
 const OUTPUTS = ["Test s výběrem odpovědí", "Pracovní list"] as const;
+
+// Vercel rejects request bodies over 4.5 MB.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const fieldClass =
   "w-full rounded-xl bg-surface-container-high px-4 py-3 text-body-lg text-on-surface outline-none placeholder:text-on-surface-variant/70 focus:ghost-border";
@@ -42,10 +47,57 @@ export function LessonWizard() {
   const [subject, setSubject] = useState("");
   const [topic, setTopic] = useState("");
   const [output, setOutput] = useState<(typeof OUTPUTS)[number]>(OUTPUTS[0]);
-  const [notice, setNotice] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [url, setUrl] = useState("");
+  const [count, setCount] = useState(10);
+  const [difficulty, setDifficulty] = useState("Střední");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<GenerateResult | null>(null);
 
   const school = SCHOOL_TYPES.find((s) => s.id === schoolId);
-  const canContinue = [Boolean(school && grade && subject), Boolean(topic), true][step];
+  const uploadBytes = files.reduce((sum, f) => sum + f.size, 0);
+  const tooBig = uploadBytes > MAX_UPLOAD_BYTES;
+  const canContinue = [
+    Boolean(school && grade && subject),
+    Boolean(topic && (files.length > 0 || url) && !tooBig),
+    true,
+  ][step];
+
+  async function submit() {
+    setLoading(true);
+    setError(null);
+    const form = new FormData();
+    form.set("output", output === OUTPUTS[0] ? "test" : "worksheet");
+    form.set("school", school?.name ?? "");
+    form.set("grade", grade ?? "");
+    form.set("subject", subject);
+    form.set("topic", topic);
+    form.set("url", url);
+    form.set("count", String(count));
+    form.set("difficulty", difficulty);
+    files.forEach((f) => form.append("files", f));
+    try {
+      const res = await fetch("/api/generate", { method: "POST", body: form });
+      const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
+      if (!res.ok) throw new Error(body.error);
+      setResult(body as GenerateResult);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Generování se nepovedlo.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (result) {
+    return (
+      <Sheet
+        result={result}
+        meta={`${subject} · ${school?.name} · ${grade}`}
+        onBack={() => setResult(null)}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-10">
@@ -151,14 +203,51 @@ export function LessonWizard() {
             <span className="text-label-md text-on-surface-variant">
               Fotografie, PDF, PowerPoint (PPTX)
             </span>
-            <input type="file" multiple accept="image/*,.pdf,.pptx" className="sr-only" />
+            <input
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.pptx"
+              className="sr-only"
+              onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])}
+            />
           </label>
+
+          {files.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {files.map((f, i) => (
+                <li
+                  key={`${f.name}-${i}`}
+                  className="flex items-center justify-between rounded-xl bg-surface-container-low px-4 py-2 text-sm"
+                >
+                  <span className="truncate text-on-surface">{f.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                    className="ml-4 text-on-surface-variant hover:text-on-surface"
+                  >
+                    Odebrat
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {tooBig && (
+            <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">
+              Soubory jsou dohromady větší než 4 MB. Odeberte některý nebo nahrajte menší fotky.
+            </p>
+          )}
 
           <label className="flex flex-col gap-2">
             <span className="text-label-md text-on-surface-variant">
               Nebo vložte odkaz na webovou stránku
             </span>
-            <input className={fieldClass} type="url" placeholder="https://" />
+            <input
+              className={fieldClass}
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value.trim())}
+              placeholder="https://"
+            />
           </label>
         </div>
       )}
@@ -178,11 +267,22 @@ export function LessonWizard() {
               <span className="text-label-md text-on-surface-variant">
                 {output === OUTPUTS[0] ? "Počet otázek" : "Počet úloh"}
               </span>
-              <input className={fieldClass} type="number" min={1} max={30} defaultValue={10} />
+              <input
+                className={fieldClass}
+                type="number"
+                min={1}
+                max={30}
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
+              />
             </label>
             <label className="flex flex-col gap-2">
               <span className="text-label-md text-on-surface-variant">Obtížnost</span>
-              <select className={fieldClass} defaultValue="Střední">
+              <select
+                className={fieldClass}
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value)}
+              >
                 <option>Lehká</option>
                 <option>Střední</option>
                 <option>Náročná</option>
@@ -211,13 +311,20 @@ export function LessonWizard() {
             Pokračovat
           </AssistantButton>
         ) : (
-          <AssistantButton type="button" onClick={() => setNotice(true)}>
-            {output === OUTPUTS[0] ? "Vytvořit kvíz" : "Vytvořit pracovní list"}
+          <AssistantButton type="button" disabled={loading} onClick={submit}>
+            {loading
+              ? "Claude připravuje…"
+              : output === OUTPUTS[0]
+                ? "Vytvořit kvíz"
+                : "Vytvořit pracovní list"}
           </AssistantButton>
         )}
-        {notice && (
-          <span className="rounded-xl bg-secondary-container/60 px-4 py-2 text-sm text-on-secondary-container">
-            Generování spustíme v příští verzi.
+        {loading && (
+          <span className="text-sm text-on-surface-variant">Obvykle to trvá do minuty.</span>
+        )}
+        {error && (
+          <span className="rounded-xl bg-error-container px-4 py-2 text-sm text-on-error-container">
+            {error}
           </span>
         )}
       </div>
