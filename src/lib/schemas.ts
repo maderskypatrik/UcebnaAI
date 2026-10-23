@@ -162,24 +162,11 @@ export const MAX_ITEMS = 60;
 export const sectionPoints = (s: { points: number; items: unknown[] }) => s.points * s.items.length;
 export const totalPoints = (sheet: Sheet) => sheet.sections.reduce((sum, s) => sum + sectionPoints(s), 0);
 
-/** A common Czech grading scale by percentage of points. */
-export const GRADE_SCALE = [
-  { grade: 1, min: 0.9 },
-  { grade: 2, min: 0.75 },
-  { grade: 3, min: 0.5 },
-  { grade: 4, min: 0.3 },
-  { grade: 5, min: 0 },
-];
-
 export const STUDENT_LINE = "Jméno: ______________________ Třída: ______ Datum: __________";
 
 export const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 export const formatPoints = (n: number) => `${String(n).replace(".", ",")} b`;
-
-export const gradeScaleText = (total: number) =>
-  "Hodnocení: " +
-  GRADE_SCALE.map(({ grade, min }) => `${grade} od ${formatPoints(Math.ceil(min * total * 2) / 2)}`).join(" · ");
 
 /** First item number of each section; numbering continues across sections, as on a printed test. */
 export const sectionStarts = (sheet: Sheet) =>

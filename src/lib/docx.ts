@@ -17,7 +17,6 @@ import {
   LETTERS,
   STUDENT_LINE,
   formatPoints,
-  gradeScaleText,
   matchingCounterparts,
   matchingKeyLetter,
   sectionPoints,
@@ -48,7 +47,7 @@ const NO_BORDERS = {
 
 const BLANK = "…………………………";
 
-type Options = { showKey: boolean; showPoints: boolean; showScale: boolean };
+type Options = { showKey: boolean; showPoints: boolean };
 
 const text = (t: string, opts: IRunOptions = {}) => new TextRun({ text: t, ...opts });
 const answer = (t: string) => text(t, { bold: true, color: PRIMARY });
@@ -165,7 +164,7 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
   }
 }
 
-export async function downloadDocx(sheet: Sheet, { showKey, showPoints, showScale }: Options) {
+export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Options) {
   const header = sheet.header ?? { meta: "", student: STUDENT_LINE };
   const starts = sectionStarts(sheet);
   const total = totalPoints(sheet);
@@ -194,17 +193,13 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints, showScal
     );
   });
 
-  if (showPoints || showScale) {
-    const right = (runs: TextRun[], before = 0) =>
-      new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { before, after: 60 }, children: runs });
+  if (showPoints) {
     children.push(
-      ...(showPoints ? [right([text(`Body: ______ / ${formatPoints(total)}`, { bold: true, size: 24 })], 600)] : []),
-      ...(showScale
-        ? [
-            right([text(gradeScaleText(total), { size: 16, color: MUTED })], showPoints ? 0 : 600),
-            right([text("Známka: ______", { size: 16, color: MUTED })]),
-          ]
-        : []),
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { before: 600 },
+        children: [text(`Body: ______ / ${formatPoints(total)}`, { bold: true, size: 24 })],
+      }),
     );
   }
 

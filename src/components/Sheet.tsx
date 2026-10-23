@@ -5,7 +5,6 @@ import {
   LETTERS,
   STUDENT_LINE,
   formatPoints,
-  gradeScaleText,
   matchingCounterparts,
   matchingKeyLetter,
   sectionPoints,
@@ -269,7 +268,6 @@ export function Sheet({
   const [showKey, setShowKey] = useState(false);
   const isTest = doc.kind === "test";
   const [showPoints, setShowPoints] = useState(isTest);
-  const [showScale, setShowScale] = useState(isTest);
   const total = totalPoints(doc);
 
   const updateSection = (si: number, patch: Partial<Section>) =>
@@ -328,7 +326,7 @@ export function Sheet({
           onClick={async () => {
             // Loaded on demand so the Word library doesn't slow down the first page load.
             const { downloadDocx } = await import("@/lib/docx");
-            await downloadDocx(doc, { showKey, showPoints, showScale });
+            await downloadDocx(doc, { showKey, showPoints });
           }}
           className="rounded-xl bg-surface-container-low px-5 py-3 font-medium text-primary-container transition-colors hover:bg-surface-container"
         >
@@ -339,10 +337,6 @@ export function Sheet({
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={showScale} onChange={(e) => setShowScale(e.target.checked)} />
-          Známkovací stupnice
         </label>
         <span>Text, hlavičku i body na listu můžete upravit kliknutím přímo do nich.</span>
       </div>
@@ -398,16 +392,10 @@ export function Sheet({
           ))}
         </div>
 
-        {(showPoints || showScale) && (
-          <div className="mt-14 flex flex-col items-end gap-2 break-inside-avoid">
-            {showPoints && (
-              <p className="font-display text-title-md font-bold text-on-surface">
-                Body: ______ / {formatPoints(total)}
-              </p>
-            )}
-            {showScale && <p className="text-label-md text-on-surface-variant">{gradeScaleText(total)}</p>}
-            {showScale && <p className="text-label-md text-on-surface-variant">Známka: ______</p>}
-          </div>
+        {showPoints && (
+          <p className="mt-14 break-inside-avoid text-right font-display text-title-md font-bold text-on-surface">
+            Body: ______ / {formatPoints(total)}
+          </p>
         )}
       </article>
     </div>
