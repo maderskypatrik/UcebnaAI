@@ -12,6 +12,9 @@ import {
 } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
+import { getSupabase } from "@/lib/supabase";
+import Link from "next/link";
+import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
 
 const STEPS = ["Škola a předmět", "Podklady", "Výstup"] as const;
@@ -70,7 +73,10 @@ export function LessonWizard() {
   const [difficulty, setDifficulty] = useState("Střední");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<SheetData | null>(null);
+  const [result, setResult] = useState<{ sheet: SheetData; id: string | null } | null>(null);
+  const [left, setLeft] = useState<number | null>(null);
+  const auth = useAuth();
+  const needsLogin = auth.enabled && !auth.loading && !auth.session;
 
   const school = SCHOOL_TYPES.find((s) => s.id === schoolId);
   const uploadBytes = files.reduce((sum, f) => sum + f.size, 0);
@@ -78,6 +84,7 @@ export function LessonWizard() {
   const itemCount = sections.reduce((sum, x) => sum + x.count, 0);
   const pointCount = sections.reduce((sum, x) => sum + x.count * x.points, 0);
   const language = instructionLanguage ?? (isForeignLanguage(subject) ? "subject" : "czech");
+  const meta = `${subject} · ${school?.name} · ${grade}`;
   const canContinue = [
     Boolean(school && grade && subject),
     Boolean(topic && (files.length > 0 || url) && !tooBig),
@@ -103,12 +110,19 @@ export function LessonWizard() {
     form.set("sections", JSON.stringify(sections));
     form.set("instructionLanguage", language);
     form.set("note", note);
+    form.set("meta", meta);
     files.forEach((f) => form.append("files", f));
     try {
-      const res = await fetch("/api/generate", { method: "POST", body: form });
+      const headers: HeadersInit = {};
+      if (auth.enabled) {
+        const { data } = await getSupabase().auth.getSession();
+        if (data.session) headers.Authorization = `Bearer ${data.session.access_token}`;
+      }
+      const res = await fetch("/api/generate", { method: "POST", body: form, headers });
       const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
       if (!res.ok) throw new Error(body.error);
-      setResult(body as SheetData);
+      setResult({ sheet: body.sheet as SheetData, id: body.id ?? null });
+      if (typeof body.left === "number") setLeft(body.left);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generování se nepovedlo.");
     } finally {
@@ -117,17 +131,21 @@ export function LessonWizard() {
   }
 
   if (result) {
-    return (
-      <Sheet
-        result={result}
-        meta={`${subject} · ${school?.name} · ${grade}`}
-        onBack={() => setResult(null)}
-      />
-    );
+    return <Sheet result={result.sheet} id={result.id} meta={meta} onBack={() => setResult(null)} />;
   }
 
   return (
     <div className="flex flex-col gap-10">
+      {needsLogin && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-secondary-container/60 px-6 py-4">
+          <p className="text-body-lg text-on-surface">
+            Pro vytváření testů se prosím přihlaste. Hotové testy se vám pak ukládají do Kabinetu.
+          </p>
+          <Link href="/prihlaseni" className="bg-assistant rounded-xl px-5 py-2.5 font-medium text-on-primary">
+            Přihlásit se
+          </Link>
+        </div>
+      )}
       <ol className="flex flex-wrap gap-x-8 gap-y-3">
         {STEPS.map((label, i) => (
           <li key={label} className="flex items-center gap-3">
@@ -457,7 +475,7 @@ export function LessonWizard() {
             Pokračovat
           </AssistantButton>
         ) : (
-          <AssistantButton type="button" disabled={loading || !canContinue} onClick={submit}>
+          <AssistantButton type="button" disabled={loading || !canContinue || needsLogin} onClick={submit}>
             {loading
               ? "Claude připravuje…"
               : output === "test"
@@ -467,6 +485,9 @@ export function LessonWizard() {
         )}
         {loading && (
           <span className="text-sm text-on-surface-variant">Obvykle to trvá do minuty.</span>
+        )}
+        {!loading && left !== null && (
+          <span className="text-sm text-on-surface-variant">Dnes můžete vytvořit ještě {left}×.</span>
         )}
         {error && (
           <span className="rounded-xl bg-error-container px-4 py-2 text-sm text-on-error-container">

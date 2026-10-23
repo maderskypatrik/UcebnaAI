@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { generate } from "@/lib/generate";
 import { MAX_ITEMS, QUESTION_TYPE_IDS, type SectionSpec } from "@/lib/schemas";
+import { supabaseConfigured, supabaseForToken } from "@/lib/supabase";
 
 // Generating from a long PDF can take a minute or two.
 export const maxDuration = 300;
@@ -24,6 +25,28 @@ function parseSections(raw: string): SectionSpec[] {
 }
 
 export async function POST(request: Request) {
+  // With Supabase set up, only signed-in teachers can generate, within their daily limit.
+  let supabase: ReturnType<typeof supabaseForToken> | undefined;
+  if (supabaseConfigured) {
+    const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
+    supabase = token ? supabaseForToken(token) : undefined;
+    const { data: user } = supabase ? await supabase.auth.getUser() : { data: { user: null } };
+    if (!supabase || !user.user) {
+      return Response.json({ error: "Pro vytvoření testu se prosím přihlaste." }, { status: 401 });
+    }
+    const { data: left, error } = await supabase.rpc("generations_left");
+    if (error) {
+      console.error("Supabase generations_left", error.message);
+      return Response.json({ error: "Nepodařilo se ověřit denní limit, zkuste to znovu." }, { status: 500 });
+    }
+    if (left <= 0) {
+      return Response.json(
+        { error: "Dnešní limit generování je vyčerpaný. Zítra můžete pokračovat." },
+        { status: 429 },
+      );
+    }
+  }
+
   const form = await request.formData();
   const text = (key: string) => String(form.get(key) ?? "").trim();
 
@@ -54,7 +77,16 @@ export async function POST(request: Request) {
       url,
       files,
     });
-    return Response.json(sheet);
+    if (!supabase) return Response.json({ sheet });
+
+    const { data: left } = await supabase.rpc("consume_generation");
+    const { data: saved, error } = await supabase
+      .from("sheets")
+      .insert({ kind: sheet.kind, title: sheet.title, meta: text("meta"), data: sheet })
+      .select("id")
+      .single();
+    if (error) console.error("Supabase save", error.message);
+    return Response.json({ sheet, id: saved?.id ?? null, left: left ?? null });
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {
       return Response.json({ error: "Chybí nebo je neplatný API klíč pro Claude." }, { status: 500 });
