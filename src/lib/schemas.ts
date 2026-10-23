@@ -92,10 +92,14 @@ export type Section = {
   title: string;
   instructions: string;
   items: Item[];
+  /** Fill-in sections only: leave out the word bank. */
+  hideBank?: boolean;
 };
 
 export type Sheet = {
   kind: "test" | "worksheet";
+  /** Header lines above the title; filled in by the app, editable by the teacher. */
+  header?: { meta: string; student: string };
   title: string;
   instructions: string;
   sections: Section[];
@@ -166,3 +170,30 @@ export const GRADE_SCALE = [
   { grade: 4, min: 0.3 },
   { grade: 5, min: 0 },
 ];
+
+export const STUDENT_LINE = "Jméno: ______________________ Třída: ______ Datum: __________";
+
+export const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+export const formatPoints = (n: number) => `${String(n).replace(".", ",")} b`;
+
+export const gradeScaleText = (total: number) =>
+  "Hodnocení: " +
+  GRADE_SCALE.map(({ grade, min }) => `${grade} od ${formatPoints(Math.ceil(min * total * 2) / 2)}`).join(" · ");
+
+/** First item number of each section; numbering continues across sections, as on a printed test. */
+export const sectionStarts = (sheet: Sheet) =>
+  sheet.sections.reduce<number[]>(
+    (acc, _, i) => [...acc, i === 0 ? 1 : acc[i - 1] + sheet.sections[i - 1].items.length],
+    [],
+  );
+
+/**
+ * Matching counterparts shifted by one, so none sits next to its own term.
+ * Term i's counterpart ends up at letter i - 1.
+ */
+export const matchingCounterparts = (items: Item[]) => items.map((_, i) => items[(i + 1) % items.length].answer);
+export const matchingKeyLetter = (i: number, n: number) => LETTERS[(i - 1 + n) % n];
+
+/** Fill-in word bank: all answers in alphabetical order. */
+export const wordBank = (items: Item[]) => items.map((item) => item.answer).sort((a, b) => a.localeCompare(b, "cs"));

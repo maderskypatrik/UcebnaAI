@@ -2,17 +2,20 @@
 
 import { useState } from "react";
 import {
-  GRADE_SCALE,
+  LETTERS,
+  STUDENT_LINE,
+  formatPoints,
+  gradeScaleText,
+  matchingCounterparts,
+  matchingKeyLetter,
   sectionPoints,
+  sectionStarts,
   totalPoints,
+  wordBank,
   type Item,
   type Section,
   type Sheet as SheetData,
 } from "@/lib/schemas";
-
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-const formatPoints = (n: number) => `${String(n).replace(".", ",")} b`;
 
 /** A field that looks like printed text but can be edited in place. */
 function Editable({
@@ -60,6 +63,7 @@ type ItemProps = {
   start: number;
   showKey: boolean;
   onItem: (index: number, patch: Partial<Item>) => void;
+  onSection: (patch: Partial<Section>) => void;
 };
 
 function Prompt({ item, index, onItem }: { item: Item; index: number; onItem: ItemProps["onItem"] }) {
@@ -148,16 +152,19 @@ function TrueFalse({ section, start, showKey, onItem }: ItemProps) {
   );
 }
 
-function FillBlank({ section, start, showKey, onItem }: ItemProps) {
-  const [withBank, setWithBank] = useState(true);
-  const bank = section.items.map((item) => item.answer).sort((a, b) => a.localeCompare(b, "cs"));
+function FillBlank({ section, start, showKey, onItem, onSection }: ItemProps) {
+  const bank = wordBank(section.items);
   return (
     <div className="flex flex-col gap-4">
       <label className="flex items-center gap-2 text-label-md text-on-surface-variant print:hidden">
-        <input type="checkbox" checked={withBank} onChange={(e) => setWithBank(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={!section.hideBank}
+          onChange={(e) => onSection({ hideBank: !e.target.checked })}
+        />
         Nabídka slov k doplnění
       </label>
-      {withBank && (
+      {!section.hideBank && (
         <p className="rounded-xl bg-surface-container-low px-5 py-3 text-body-lg text-on-surface print:bg-transparent print:outline print:outline-1 print:outline-outline-variant">
           {bank.join(" · ")}
         </p>
@@ -177,13 +184,10 @@ function FillBlank({ section, start, showKey, onItem }: ItemProps) {
   );
 }
 
-/**
- * Terms on the left, counterparts shifted by one on the right, so no counterpart
- * sits next to its own term. Term i's counterpart is at letter i - 1.
- */
+/** Terms on the left, shuffled counterparts on the right. */
 function Matching({ section, start, showKey, onItem }: ItemProps) {
   const n = section.items.length;
-  const shifted = section.items.map((_, i) => section.items[(i + 1) % n].answer);
+  const shifted = matchingCounterparts(section.items);
   return (
     <div className="grid grid-cols-2 gap-x-10 text-body-lg text-on-surface">
       <ol className="flex flex-col gap-3">
@@ -194,7 +198,7 @@ function Matching({ section, start, showKey, onItem }: ItemProps) {
               <Prompt item={item} index={i} onItem={onItem} />
             </span>
             {showKey ? (
-              <span className="font-semibold text-primary-container">{LETTERS[(i - 1 + n) % n]}</span>
+              <span className="font-semibold text-primary-container">{matchingKeyLetter(i, n)}</span>
             ) : (
               <span className="w-8 border-b border-dotted border-on-surface-variant/60" />
             )}
@@ -251,17 +255,6 @@ function SectionItems(props: ItemProps) {
   }
 }
 
-function GradeScale({ total }: { total: number }) {
-  return (
-    <p className="text-label-md text-on-surface-variant">
-      Hodnocení:{" "}
-      {GRADE_SCALE.map(({ grade, min }) => `${grade} od ${formatPoints(Math.ceil(min * total * 2) / 2)}`).join(
-        " · ",
-      )}
-    </p>
-  );
-}
-
 export function Sheet({
   result,
   meta,
@@ -271,7 +264,8 @@ export function Sheet({
   meta: string;
   onBack: () => void;
 }) {
-  const [doc, setDoc] = useState(result);
+  const [doc, setDoc] = useState<SheetData>({ ...result, header: { meta, student: STUDENT_LINE } });
+  const header = doc.header ?? { meta, student: STUDENT_LINE };
   const [showKey, setShowKey] = useState(false);
   const isTest = doc.kind === "test";
   const [showPoints, setShowPoints] = useState(isTest);
@@ -288,11 +282,15 @@ export function Sheet({
       ),
     }));
 
-  // Numbering continues across sections, as on a printed test.
-  const starts = doc.sections.reduce<number[]>(
-    (acc, s, i) => [...acc, i === 0 ? 1 : acc[i - 1] + doc.sections[i - 1].items.length],
-    [],
-  );
+  const starts = sectionStarts(doc);
+
+  // The teacher edits a section's total; points per item follow from it.
+  const setSectionTotal = (si: number, text: string) => {
+    const value = Number(text.replace(",", ".").replace(/[^\d.]/g, ""));
+    const count = doc.sections[si].items.length;
+    if (value > 0 && count > 0) updateSection(si, { points: value / count });
+    else updateSection(si, {});
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -300,7 +298,7 @@ export function Sheet({
         <button
           type="button"
           onClick={onBack}
-          className="rounded-xl px-5 py-3 font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+          className="rounded-xl px-3 py-3 font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
         >
           Zpět k nastavení
         </button>
@@ -323,7 +321,18 @@ export function Sheet({
           onClick={() => window.print()}
           className="bg-assistant rounded-xl px-6 py-3 font-medium text-on-primary"
         >
-          Vytisknout / uložit PDF
+          Tisk / PDF
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            // Loaded on demand so the Word library doesn't slow down the first page load.
+            const { downloadDocx } = await import("@/lib/docx");
+            await downloadDocx(doc, { showKey, showPoints, showScale });
+          }}
+          className="rounded-xl bg-surface-container-low px-5 py-3 font-medium text-primary-container transition-colors hover:bg-surface-container"
+        >
+          Stáhnout Word
         </button>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-label-md text-on-surface-variant print:hidden">
@@ -335,14 +344,17 @@ export function Sheet({
           <input type="checkbox" checked={showScale} onChange={(e) => setShowScale(e.target.checked)} />
           Známkovací stupnice
         </label>
-        <span>Text na listu můžete upravit kliknutím přímo do něj.</span>
+        <span>Text, hlavičku i body na listu můžete upravit kliknutím přímo do nich.</span>
       </div>
 
       {/* A4 Digital Sheet */}
       <article className="mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none">
         <div className="mb-8 flex flex-wrap justify-between gap-4 text-label-md text-on-surface-variant">
-          <span>{meta}</span>
-          <span>Jméno: ______________________ Třída: ______ Datum: __________</span>
+          <Editable value={header.meta} onChange={(v) => setDoc((d) => ({ ...d, header: { ...header, meta: v } }))} />
+          <Editable
+            value={header.student}
+            onChange={(v) => setDoc((d) => ({ ...d, header: { ...header, student: v } }))}
+          />
         </div>
         <h2 className="mb-2 font-display text-title-lg font-bold text-on-surface">
           <Editable value={doc.title} onChange={(title) => setDoc((d) => ({ ...d, title }))} />
@@ -362,7 +374,13 @@ export function Sheet({
                 </h3>
                 {showPoints && (
                   <span className="shrink-0 text-label-md text-on-surface-variant">
-                    ___ / {formatPoints(sectionPoints(section))}
+                    ___ /{" "}
+                    <Editable
+                      key={sectionPoints(section)}
+                      value={String(sectionPoints(section)).replace(".", ",")}
+                      onChange={(v) => setSectionTotal(si, v)}
+                    />{" "}
+                    b
                   </span>
                 )}
               </div>
@@ -374,6 +392,7 @@ export function Sheet({
                 start={starts[si]}
                 showKey={showKey}
                 onItem={(ii, patch) => updateItem(si, ii, patch)}
+                onSection={(patch) => updateSection(si, patch)}
               />
             </section>
           ))}
@@ -386,7 +405,7 @@ export function Sheet({
                 Body: ______ / {formatPoints(total)}
               </p>
             )}
-            {showScale && <GradeScale total={total} />}
+            {showScale && <p className="text-label-md text-on-surface-variant">{gradeScaleText(total)}</p>}
             {showScale && <p className="text-label-md text-on-surface-variant">Známka: ______</p>}
           </div>
         )}
