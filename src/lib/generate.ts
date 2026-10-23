@@ -49,7 +49,11 @@ export async function generate(input: GenerateInput): Promise<GenerateResult> {
   const materials = await materialsToBlocks(input.files, input.url);
   const schema = input.output === "test" ? TestSchema : WorksheetSchema;
 
-  client ??= new Anthropic();
+  // An organization-level API key must name its workspace on every request.
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
+  client ??= new Anthropic({
+    defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
+  });
   const response = await client.beta.messages.parse({
     model: MODEL,
     max_tokens: 16000,
