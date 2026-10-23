@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getSupabase } from "@/lib/supabase";
 import {
   LETTERS,
   STUDENT_LINE,
@@ -254,16 +255,49 @@ function SectionItems(props: ItemProps) {
   }
 }
 
+type SaveState = "saved" | "saving" | "error";
+
+/** Saves edits to the Kabinet a moment after the teacher stops typing. */
+function useAutosave(id: string | null | undefined, doc: SheetData): SaveState {
+  const [savedDoc, setSavedDoc] = useState(doc);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!id || doc === savedDoc) return;
+    const timer = setTimeout(async () => {
+      const { error } = await getSupabase()
+        .from("sheets")
+        .update({ title: doc.title, meta: doc.header?.meta ?? "", data: doc, updated_at: new Date().toISOString() })
+        .eq("id", id);
+      setFailed(Boolean(error));
+      if (!error) setSavedDoc(doc);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [id, doc, savedDoc]);
+  return failed ? "error" : doc === savedDoc ? "saved" : "saving";
+}
+
+const SAVE_LABELS: Record<SaveState, string> = {
+  saved: "Uloženo v Kabinetu",
+  saving: "Ukládám…",
+  error: "Změny se nepodařilo uložit",
+};
+
 export function Sheet({
   result,
+  id,
   meta,
   onBack,
+  backLabel = "Zpět k nastavení",
 }: {
   result: SheetData;
+  /** Kabinet id; when set, edits are saved automatically. */
+  id?: string | null;
   meta: string;
   onBack: () => void;
+  backLabel?: string;
 }) {
-  const [doc, setDoc] = useState<SheetData>({ ...result, header: { meta, student: STUDENT_LINE } });
+  const [doc, setDoc] = useState<SheetData>({ ...result, header: result.header ?? { meta, student: STUDENT_LINE } });
+  const saveState = useAutosave(id, doc);
   const header = doc.header ?? { meta, student: STUDENT_LINE };
   const [showKey, setShowKey] = useState(false);
   const isTest = doc.kind === "test";
@@ -298,7 +332,7 @@ export function Sheet({
           onClick={onBack}
           className="rounded-xl px-3 py-3 font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
         >
-          Zpět k nastavení
+          {backLabel}
         </button>
         <div className="flex rounded-xl bg-surface-container-low p-1">
           {[false, true].map((key) => (
@@ -339,6 +373,11 @@ export function Sheet({
           Body u částí
         </label>
         <span>Text, hlavičku i body na listu můžete upravit kliknutím přímo do nich.</span>
+        {id && (
+          <span className={saveState === "error" ? "text-on-error-container" : "font-medium text-primary-container"}>
+            {SAVE_LABELS[saveState]}
+          </span>
+        )}
       </div>
 
       {/* A4 Digital Sheet */}

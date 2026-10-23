@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.1.0",
+    "@supabase/supabase-js": "^2.117.2",
     "docx": "^9.5.1",
     "jszip": "^3.10.2",
     "next": "16.4.2",
