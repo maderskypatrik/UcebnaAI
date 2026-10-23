@@ -1,13 +1,27 @@
 "use client";
 
 import { useState } from "react";
-import type { GenerateResult } from "@/lib/schemas";
+import {
+  MAX_ITEMS,
+  PRESETS,
+  QUESTION_TYPES,
+  QUESTION_TYPE_IDS,
+  type QuestionType,
+  type SectionSpec,
+  type Sheet as SheetData,
+} from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
 import { Sheet } from "./Sheet";
 
 const STEPS = ["Škola a předmět", "Podklady", "Výstup"] as const;
-const OUTPUTS = ["Test s výběrem odpovědí", "Pracovní list"] as const;
+const OUTPUTS = [
+  { id: "test", label: "Test", hint: "s body a známkou" },
+  { id: "worksheet", label: "Pracovní list", hint: "k procvičování" },
+] as const;
+
+const isForeignLanguage = (subject: string) =>
+  /jazyk|english|deutsch|angli|němč|nemc|franc|španěl|rušt|ruský/i.test(subject) && !/český/i.test(subject);
 
 // Vercel rejects request bodies over 4.5 MB.
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
@@ -46,42 +60,55 @@ export function LessonWizard() {
   const [grade, setGrade] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
   const [topic, setTopic] = useState("");
-  const [output, setOutput] = useState<(typeof OUTPUTS)[number]>(OUTPUTS[0]);
+  const [output, setOutput] = useState<"test" | "worksheet">("test");
+  const [presetId, setPresetId] = useState<string | null>(PRESETS[1].id);
+  const [sections, setSections] = useState<SectionSpec[]>(PRESETS[1].sections);
+  const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(null);
+  const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [url, setUrl] = useState("");
-  const [count, setCount] = useState(10);
   const [difficulty, setDifficulty] = useState("Střední");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<GenerateResult | null>(null);
+  const [result, setResult] = useState<SheetData | null>(null);
 
   const school = SCHOOL_TYPES.find((s) => s.id === schoolId);
   const uploadBytes = files.reduce((sum, f) => sum + f.size, 0);
   const tooBig = uploadBytes > MAX_UPLOAD_BYTES;
+  const itemCount = sections.reduce((sum, x) => sum + x.count, 0);
+  const pointCount = sections.reduce((sum, x) => sum + x.count * x.points, 0);
+  const language = instructionLanguage ?? (isForeignLanguage(subject) ? "subject" : "czech");
   const canContinue = [
     Boolean(school && grade && subject),
     Boolean(topic && (files.length > 0 || url) && !tooBig),
-    true,
+    sections.length > 0 && itemCount <= MAX_ITEMS,
   ][step];
+
+  const updateSection = (i: number, patch: Partial<SectionSpec>) => {
+    setPresetId(null);
+    setSections(sections.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  };
 
   async function submit() {
     setLoading(true);
     setError(null);
     const form = new FormData();
-    form.set("output", output === OUTPUTS[0] ? "test" : "worksheet");
+    form.set("output", output);
     form.set("school", school?.name ?? "");
     form.set("grade", grade ?? "");
     form.set("subject", subject);
     form.set("topic", topic);
     form.set("url", url);
-    form.set("count", String(count));
     form.set("difficulty", difficulty);
+    form.set("sections", JSON.stringify(sections));
+    form.set("instructionLanguage", language);
+    form.set("note", note);
     files.forEach((f) => form.append("files", f));
     try {
       const res = await fetch("/api/generate", { method: "POST", body: form });
       const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
       if (!res.ok) throw new Error(body.error);
-      setResult(body as GenerateResult);
+      setResult(body as SheetData);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generování se nepovedlo.");
     } finally {
@@ -256,26 +283,122 @@ export function LessonWizard() {
         <div className="flex flex-col gap-8">
           <div className="grid gap-3 sm:grid-cols-2">
             {OUTPUTS.map((o) => (
-              <Option key={o} selected={output === o} onClick={() => setOutput(o)}>
-                <span className="font-medium">{o}</span>
+              <Option key={o.id} selected={output === o.id} onClick={() => setOutput(o.id)}>
+                <span className="block font-medium">{o.label}</span>
+                <span className="block text-label-md opacity-75">{o.hint}</span>
               </Option>
             ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <label className="flex flex-col gap-2">
-              <span className="text-label-md text-on-surface-variant">
-                {output === OUTPUTS[0] ? "Počet otázek" : "Počet úloh"}
+          <fieldset className="flex flex-col gap-3">
+            <legend className="mb-3 text-label-md text-on-surface-variant">Šablona</legend>
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  title={p.hint}
+                  aria-pressed={presetId === p.id}
+                  onClick={() => {
+                    setPresetId(p.id);
+                    setSections(p.sections);
+                  }}
+                  className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                    presetId === p.id
+                      ? "bg-primary-container text-on-primary"
+                      : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-3">
+            <legend className="mb-3 text-label-md text-on-surface-variant">
+              Části {output === "test" ? "testu" : "listu"}
+            </legend>
+            {sections.map((sec, i) => (
+              <div
+                key={i}
+                className="grid grid-cols-[2rem_1fr] items-center gap-3 rounded-xl bg-surface-container-low p-3 sm:grid-cols-[2rem_1fr_6rem_6rem_auto]"
+              >
+                <span className="font-display font-bold text-primary-container">
+                  {String.fromCharCode(65 + i)}
+                </span>
+                <select
+                  aria-label="Typ úloh"
+                  className={fieldClass}
+                  value={sec.type}
+                  onChange={(e) => {
+                    const type = e.target.value as QuestionType;
+                    updateSection(i, { type, points: QUESTION_TYPES[type].points });
+                  }}
+                >
+                  {QUESTION_TYPE_IDS.map((t) => (
+                    <option key={t} value={t}>
+                      {QUESTION_TYPES[t].label} ({QUESTION_TYPES[t].hint})
+                    </option>
+                  ))}
+                </select>
+                <label className="col-start-2 flex items-center gap-2 text-sm text-on-surface-variant sm:col-start-auto">
+                  <input
+                    className={`${fieldClass} px-3`}
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={sec.count}
+                    onChange={(e) => updateSection(i, { count: Number(e.target.value) })}
+                  />
+                  <span>×</span>
+                </label>
+                <label className="col-start-2 flex items-center gap-2 text-sm text-on-surface-variant sm:col-start-auto">
+                  <input
+                    className={`${fieldClass} px-3`}
+                    type="number"
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    value={sec.points}
+                    onChange={(e) => updateSection(i, { points: Number(e.target.value) })}
+                  />
+                  <span>b</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPresetId(null);
+                    setSections(sections.filter((_, j) => j !== i));
+                  }}
+                  className="col-start-2 justify-self-start rounded-xl px-3 py-2 text-sm text-on-surface-variant hover:bg-surface-container sm:col-start-auto"
+                >
+                  Odebrat
+                </button>
+              </div>
+            ))}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                disabled={sections.length >= 8}
+                onClick={() => {
+                  setPresetId(null);
+                  setSections([...sections, { type: "short_answer", count: 3, points: 2 }]);
+                }}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-primary-container hover:bg-surface-container-low disabled:opacity-50"
+              >
+                + Přidat část
+              </button>
+              <span
+                className={`text-sm ${itemCount > MAX_ITEMS ? "text-on-error-container" : "text-on-surface-variant"}`}
+              >
+                Celkem {itemCount} položek · {pointCount} bodů
+                {itemCount > MAX_ITEMS && ` (nejvýš ${MAX_ITEMS} položek)`}
               </span>
-              <input
-                className={fieldClass}
-                type="number"
-                min={1}
-                max={30}
-                value={count}
-                onChange={(e) => setCount(Number(e.target.value))}
-              />
-            </label>
+            </div>
+          </fieldset>
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-2">
               <span className="text-label-md text-on-surface-variant">Obtížnost</span>
               <select
@@ -288,7 +411,30 @@ export function LessonWizard() {
                 <option>Náročná</option>
               </select>
             </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-label-md text-on-surface-variant">Pokyny a nadpisy psát</span>
+              <select
+                className={fieldClass}
+                value={language}
+                onChange={(e) => setInstructionLanguage(e.target.value as "czech" | "subject")}
+              >
+                <option value="czech">česky</option>
+                <option value="subject">v jazyce předmětu</option>
+              </select>
+            </label>
           </div>
+
+          <label className="flex flex-col gap-2">
+            <span className="text-label-md text-on-surface-variant">
+              Poznámka pro AI (nepovinné)
+            </span>
+            <textarea
+              className={`${fieldClass} min-h-24`}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="např. jen slovíčka ze strany 42, zaměř se na frázová slovesa"
+            />
+          </label>
 
           <p className="text-label-md text-on-surface-variant">
             {school?.name} · {grade} · {subject} · {topic}
@@ -311,11 +457,11 @@ export function LessonWizard() {
             Pokračovat
           </AssistantButton>
         ) : (
-          <AssistantButton type="button" disabled={loading} onClick={submit}>
+          <AssistantButton type="button" disabled={loading || !canContinue} onClick={submit}>
             {loading
               ? "Claude připravuje…"
-              : output === OUTPUTS[0]
-                ? "Vytvořit kvíz"
+              : output === "test"
+                ? "Vytvořit test"
                 : "Vytvořit pracovní list"}
           </AssistantButton>
         )}
