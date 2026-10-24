@@ -12,7 +12,7 @@ import {
 } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
-import { getSupabase } from "@/lib/supabase";
+import { postForm, requestReplacement } from "@/lib/client-api";
 import Link from "next/link";
 import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
@@ -113,14 +113,7 @@ export function LessonWizard() {
     form.set("meta", meta);
     files.forEach((f) => form.append("files", f));
     try {
-      const headers: HeadersInit = {};
-      if (auth.enabled) {
-        const { data } = await getSupabase().auth.getSession();
-        if (data.session) headers.Authorization = `Bearer ${data.session.access_token}`;
-      }
-      const res = await fetch("/api/generate", { method: "POST", body: form, headers });
-      const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
-      if (!res.ok) throw new Error(body.error);
+      const body = await postForm<{ sheet: SheetData; id?: string; left?: number }>("/api/generate", form);
       setResult({ sheet: body.sheet as SheetData, id: body.id ?? null });
       if (typeof body.left === "number") setLeft(body.left);
     } catch (e) {
@@ -131,7 +124,15 @@ export function LessonWizard() {
   }
 
   if (result) {
-    return <Sheet result={result.sheet} id={result.id} meta={meta} onBack={() => setResult(null)} />;
+    return (
+      <Sheet
+        result={result.sheet}
+        id={result.id}
+        meta={meta}
+        onBack={() => setResult(null)}
+        onReplace={(args) => requestReplacement({ ...args, files, url })}
+      />
+    );
   }
 
   return (

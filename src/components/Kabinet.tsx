@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { Sheet as SheetData } from "@/lib/schemas";
+import { requestReplacement } from "@/lib/client-api";
 import { getSupabase, type SheetRow } from "@/lib/supabase";
 import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
@@ -120,6 +121,9 @@ export function SavedSheet({ id }: { id: string }) {
   if (error) return <p className="rounded-xl bg-error-container px-4 py-3 text-on-error-container">{error}</p>;
   if (!row) return <Message>Načítám…</Message>;
   return (
-    <Sheet result={row.data} id={row.id} meta={row.meta} onBack={() => router.push("/kabinet")} backLabel="Zpět do Kabinetu" />
+    <Sheet result={row.data} id={row.id} meta={row.meta} onBack={() => router.push("/kabinet")}
+      backLabel="Zpět do Kabinetu"
+      onReplace={requestReplacement}
+    />
   );
 }
