@@ -11,8 +11,14 @@ import {
   TabStopType,
   TextRun,
   WidthType,
+  ImportedXmlComponent,
   type IRunOptions,
+  type ParagraphChild,
 } from "docx";
+import katex from "katex";
+import "katex/contrib/mhchem";
+import { mml2omml } from "mathml2omml";
+import { chemRuns, chemistry, splitMath, texToPlain, toPlain } from "./rich";
 import {
   LETTERS,
   STUDENT_LINE,
@@ -50,8 +56,37 @@ const BLANK = "…………………………";
 type Options = { showKey: boolean; showPoints: boolean };
 
 const text = (t: string, opts: IRunOptions = {}) => new TextRun({ text: t, ...opts });
-const answer = (t: string) => text(t, { bold: true, color: PRIMARY });
-const p = (children: TextRun[], spacingAfter = 120, indent = 0) =>
+
+/** A formula as a Word equation, which teachers can keep editing in Word. */
+function equation(tex: string): ParagraphChild | null {
+  try {
+    const html = katex.renderToString(tex, { output: "mathml", throwOnError: true, strict: "ignore" });
+    const mathml = html.match(/<math[\s\S]*<\/math>/)?.[0].replace(/<annotation[\s\S]*?<\/annotation>/, "");
+    if (!mathml) return null;
+    // fromXmlString wraps the parsed XML in a nameless root; the equation is its only child.
+    const wrapper = ImportedXmlComponent.fromXmlString(mml2omml(mathml)) as unknown as { root: ParagraphChild[] };
+    return wrapper.root[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sheet text as Word runs: formulas become equations, chemistry becomes text with
+ * sub- and superscripts (as chemists write it in Word), anything unreadable plain text.
+ */
+function rich(t: string, opts: IRunOptions = {}): ParagraphChild[] {
+  return splitMath(t).flatMap((piece) => {
+    if (piece.type === "text") return [text(piece.value, opts)];
+    const ce = chemistry(piece.tex);
+    if (ce !== null)
+      return chemRuns(ce).map((r) => text(r.text, { ...opts, subScript: r.script === "sub", superScript: r.script === "sup" }));
+    return [equation(piece.tex) ?? text(texToPlain(piece.tex), opts)];
+  });
+}
+
+const answer = (t: string) => rich(t, { bold: true, color: PRIMARY });
+const p = (children: ParagraphChild[], spacingAfter = 120, indent = 0) =>
   new Paragraph({ children, spacing: { after: spacingAfter }, indent: { left: indent } });
 
 /** An empty line the student writes on. */
@@ -88,7 +123,7 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
           new Paragraph({
             ...numbered,
             spacing: { after: 200 },
-            children: [num(i), text(`${item.prompt}  `), showKey ? answer(item.answer) : text(BLANK, { color: LINE })],
+            children: [num(i), ...rich(item.prompt), text("  "), ...(showKey ? answer(item.answer) : [text(BLANK, { color: LINE })])],
           }),
       );
       const half = Math.ceil(n / 2);
@@ -98,21 +133,21 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
       return section.items.flatMap((item, i) => {
         const correct = item.answer.trim().toUpperCase().charAt(0);
         return [
-          new Paragraph({ ...numbered, spacing: { before: 120, after: 60 }, children: [num(i), text(item.prompt, { bold: true })] }),
+          new Paragraph({ ...numbered, spacing: { before: 120, after: 60 }, children: [num(i), ...rich(item.prompt, { bold: true })] }),
           ...item.options.map((o, k) =>
-            p([showKey && LETTERS[k] === correct ? answer(`${LETTERS[k]}) ${o}`) : text(`${LETTERS[k]}) ${o}`)], 40, 480),
+            p(showKey && LETTERS[k] === correct ? answer(`${LETTERS[k]}) ${o}`) : rich(`${LETTERS[k]}) ${o}`), 40, 480),
           ),
         ];
       });
     case "true_false":
       return section.items.map((item, i) => {
         const a = item.answer.trim().toUpperCase().charAt(0);
-        const mark = (v: string) => (showKey && a === v ? answer(v) : text(v, { color: MUTED }));
+        const mark = (v: string) => (showKey && a === v ? text(v, { bold: true, color: PRIMARY }) : text(v, { color: MUTED }));
         return new Paragraph({
           ...numbered,
           tabStops: [...numbered.tabStops, { type: TabStopType.RIGHT, position: CONTENT }],
           spacing: { after: 120 },
-          children: [num(i), text(item.prompt), text("\t"), mark("P"), text("  /  ", { color: MUTED }), mark("N")],
+          children: [num(i), ...rich(item.prompt), text("\t"), mark("P"), text("  /  ", { color: MUTED }), mark("N")],
         });
       });
     case "fill_blank":
@@ -121,7 +156,7 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
           ? []
           : [
               new Paragraph({
-                children: [text(wordBank(section.items).join("  ·  "))],
+                children: rich(wordBank(section.items).join("  ·  ")),
                 spacing: { after: 200 },
                 shading: { type: ShadingType.CLEAR, fill: "F2F4F6", color: "auto" },
                 border: {
@@ -137,7 +172,7 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
             new Paragraph({
               ...numbered,
               spacing: { after: 160 },
-              children: [num(i), text(item.prompt), ...(showKey ? [text("   → "), answer(item.answer)] : [])],
+              children: [num(i), ...rich(item.prompt), ...(showKey ? [text("   → "), ...answer(item.answer)] : [])],
             }),
         ),
       ];
@@ -147,18 +182,39 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
           new Paragraph({
             ...numbered,
             spacing: { after: 160 },
-            children: [num(i), text(`${item.prompt}  `), showKey ? answer(matchingKeyLetter(i, n)) : text("____", { color: LINE })],
+            children: [num(i), ...rich(item.prompt), text("  "), showKey ? text(matchingKeyLetter(i, n), { bold: true, color: PRIMARY }) : text("____", { color: LINE })],
           }),
       );
-      const right = matchingCounterparts(section.items).map((t, i) => p([text(`${LETTERS[i]}) `, { color: MUTED }), text(t)], 160));
+      const right = matchingCounterparts(section.items).map((t, i) => p([text(`${LETTERS[i]}) `, { color: MUTED }), ...rich(t)], 160));
       return [twoColumns(left, right)];
     }
+    case "calculation":
+      return section.items.flatMap((item, i) => [
+        new Paragraph({ ...numbered, spacing: { before: 160, after: 60 }, children: [num(i), ...rich(item.prompt, { bold: true })] }),
+        ...(showKey
+          ? item.answer.split("\n").map((line) => p(answer(line), 40, 480))
+          : [
+              // An empty framed box for the working, then the line for the result.
+              new Paragraph({
+                children: [],
+                spacing: { before: 120, after: 0, line: 2400, lineRule: "exact" },
+                indent: { left: 480 },
+                border: {
+                  top: { style: BorderStyle.DASHED, size: 4, color: LINE, space: 4 },
+                  bottom: { style: BorderStyle.DASHED, size: 4, color: LINE, space: 4 },
+                  left: { style: BorderStyle.DASHED, size: 4, color: LINE, space: 4 },
+                  right: { style: BorderStyle.DASHED, size: 4, color: LINE, space: 4 },
+                },
+              }),
+              p([text("Výsledek: ", { color: MUTED }), text(BLANK, { color: LINE })], 120, 480),
+            ]),
+      ]);
     case "short_answer":
     case "open":
       return section.items.flatMap((item, i) => [
-        new Paragraph({ ...numbered, spacing: { before: 160, after: 60 }, children: [num(i), text(item.prompt, { bold: true })] }),
+        new Paragraph({ ...numbered, spacing: { before: 160, after: 60 }, children: [num(i), ...rich(item.prompt, { bold: true })] }),
         ...(showKey
-          ? item.answer.split("\n").map((line) => p([answer(line)], 40, 480))
+          ? item.answer.split("\n").map((line) => p(answer(line), 40, 480))
           : Array.from({ length: section.type === "open" ? 6 : 2 }, writingLine)),
       ]);
   }
@@ -175,8 +231,8 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
   const children: (Paragraph | Table)[] = [
     p([text(header.meta, { size: sz(16), color: MUTED })], 60),
     p([text(header.student, { size: sz(18), color: MUTED })], 360),
-    p([text(sheet.title, { bold: true, size: sz(32) }), ...(showKey ? [text("  · klíč", { bold: true, size: sz(32), color: PRIMARY })] : [])], 80),
-    p([text(sheet.instructions, { color: MUTED })], 360),
+    p([...rich(sheet.title, { bold: true, size: sz(32) }), ...(showKey ? [text("  · klíč", { bold: true, size: sz(32), color: PRIMARY })] : [])], 80),
+    p(rich(sheet.instructions, { color: MUTED }), 360),
   ];
 
   sheet.sections.forEach((section, si) => {
@@ -187,11 +243,11 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
         keepNext: true,
         children: [
           text(`${LETTERS[si]}   `, { bold: true, color: PRIMARY, size: sz(24) }),
-          text(section.title, { bold: true, size: sz(24) }),
+          ...rich(section.title, { bold: true, size: sz(24) }),
           ...(showPoints ? [text(`\t___ / ${formatPoints(sectionPoints(section))}`, { size: sz(18), color: MUTED })] : []),
         ],
       }),
-      p([text(section.instructions, { size: sz(20), color: MUTED })], 200, 400),
+      p(rich(section.instructions, { size: sz(20), color: MUTED }), 200, 400),
       ...sectionItems(section, starts[si], showKey),
     );
   });
@@ -229,7 +285,7 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${sheet.title.replace(/[\\/:*?"<>|]/g, "").trim() || "test"}${showKey ? " – klíč" : ""}.docx`;
+  link.download = `${toPlain(sheet.title).replace(/[\\/:*?"<>|]/g, "").trim() || "test"}${showKey ? " – klíč" : ""}.docx`;
   document.body.append(link);
   link.click();
   link.remove();

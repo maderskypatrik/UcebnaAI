@@ -97,3 +97,8 @@ body {
     background: #ffffff;
   }
 }
+
+/* Formulas sit in running text at about the size of the words around them. */
+.katex {
+  font-size: 1.08em;
+}

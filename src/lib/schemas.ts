@@ -50,6 +50,13 @@ export const QUESTION_TYPES = {
     prompt:
       "Krátká odpověď: prompt = otázka, na kterou stačí odpověď o několika slovech nebo jedné větě, answer = vzorová odpověď. options prázdné.",
   },
+  calculation: {
+    label: "Příklad k výpočtu",
+    hint: "výpočet s místem na postup",
+    points: 3,
+    prompt:
+      "Příklad k výpočtu: prompt = zadání příkladu nebo slovní úlohy se všemi potřebnými údaji, answer = stručný postup řešení po krocích, každý krok na nový řádek, a na posledním řádku „Výsledek: …“ i s jednotkou. Čísla volej tak, aby výpočet šel bez kalkulačky, pokud podklady nepočítají s kalkulačkou. options prázdné.",
+  },
   open: {
     label: "Otevřená úloha",
     hint: "delší odpověď, vysvětlení, sloh",
@@ -173,6 +180,16 @@ export const PRESETS: Preset[] = [
       { type: "true_false", count: 6, points: 1 },
       { type: "short_answer", count: 4, points: 2 },
       { type: "open", count: 1, points: 5 },
+    ],
+  },
+  {
+    id: "calculations",
+    label: "Výpočty",
+    hint: "matematika, fyzika, chemie",
+    sections: [
+      { type: "multiple_choice", count: 4, points: 1 },
+      { type: "fill_blank", count: 4, points: 1 },
+      { type: "calculation", count: 4, points: 3 },
     ],
   },
   {
