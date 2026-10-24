@@ -3,9 +3,9 @@ import { AppShell } from "@/components/AppShell";
 
 export const metadata = { title: "Ochrana osobních údajů · Učebna.ai" };
 
-// Fill in before launch: who runs Učebna.ai and where teachers can write.
-const OPERATOR = "[jméno nebo firma provozovatele, IČO, adresa]";
-const CONTACT = "[kontaktní e-mail]";
+// Who runs Učebna.ai and where teachers can write.
+const OPERATOR = "Patrik Maderský";
+const CONTACT = "pmadersky@gmail.com";
 const UPDATED = "24. 10. 2026";
 
 function Part({ title, children }: { title: string; children: ReactNode }) {
@@ -23,7 +23,11 @@ export default function PrivacyPage() {
       <div className="flex max-w-2xl flex-col gap-10">
         <Part title="Kdo údaje zpracovává">
           <p>
-            Správcem osobních údajů je {OPERATOR}. S dotazy nebo žádostmi pište na {CONTACT}.
+            Správcem osobních údajů je {OPERATOR}. S dotazy nebo žádostmi pište na{" "}
+            <a href={`mailto:${CONTACT}`} className="font-medium text-primary-container">
+              {CONTACT}
+            </a>
+            .
           </p>
         </Part>
 
