@@ -84,6 +84,11 @@ export function AppShell({
         <section className="rounded-xl bg-surface-container-lowest px-6 py-10 shadow-ambient sm:px-12 print:p-0 print:shadow-none">
           {children}
         </section>
+        <footer className="mt-8 flex justify-center text-label-md text-on-surface-variant print:hidden">
+          <Link href="/ochrana-osobnich-udaju" className="rounded-lg px-3 py-1 hover:bg-surface-container-low">
+            Ochrana osobních údajů
+          </Link>
+        </footer>
       </main>
     </div>
   );

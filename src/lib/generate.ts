@@ -8,6 +8,20 @@ const MODEL = "claude-opus-5-5";
 
 let client: Anthropic | undefined;
 
+/** Tokens one Claude call used, kept so the cost per test can be measured. */
+export type Usage = { model: string; input: number; output: number; cacheRead: number; cacheWrite: number };
+
+function usageOf(response: { model: string; usage: Anthropic.Beta.BetaUsage }): Usage {
+  return {
+    // With fallbacks on, the model that answered can differ from the one requested.
+    model: response.model,
+    input: response.usage.input_tokens,
+    output: response.usage.output_tokens,
+    cacheRead: response.usage.cache_read_input_tokens ?? 0,
+    cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
+  };
+}
+
 export type GenerateInput = {
   output: "test" | "worksheet";
   school: string;
@@ -57,7 +71,7 @@ function getClient(): Anthropic {
   return client;
 }
 
-export async function generate(input: GenerateInput): Promise<Sheet> {
+export async function generate(input: GenerateInput): Promise<{ sheet: Sheet; usage: Usage }> {
   const materials = await materialsToBlocks(input.files, input.url);
   const response = await getClient().beta.messages.parse({
     model: MODEL,
@@ -79,7 +93,7 @@ export async function generate(input: GenerateInput): Promise<Sheet> {
   const generated = GeneratedSchema.parse(response.parsed_output);
   // Types and points come from the teacher's settings, so a section Claude
   // mislabels or adds can't change how the sheet is scored.
-  return {
+  const sheet: Sheet = {
     kind: input.output,
     title: generated.title,
     instructions: generated.instructions,
@@ -94,6 +108,7 @@ export async function generate(input: GenerateInput): Promise<Sheet> {
       };
     }),
   };
+  return { sheet, usage: usageOf(response) };
 }
 
 const ItemSchema = z.object({ prompt: z.string(), options: z.array(z.string()), answer: z.string() });
@@ -110,7 +125,7 @@ export type ReplaceInput = {
 };
 
 /** One new item for a section, different from the ones already there. */
-export async function replaceItem(input: ReplaceInput): Promise<Item> {
+export async function replaceItem(input: ReplaceInput): Promise<{ item: Item; usage: Usage }> {
   const materials = await materialsToBlocks(input.files, input.url);
   const t = QUESTION_TYPES[input.section.type];
   const others = input.section.items
@@ -148,5 +163,68 @@ Napiš jednu novou položku místo té označené „NAHRADIT“. Musí být jin
   if (response.stop_reason === "refusal" || !response.parsed_output) {
     throw new Error("Novou otázku se nepodařilo vytvořit, zkuste to znovu.");
   }
-  return ItemSchema.parse(response.parsed_output);
+  return { item: ItemSchema.parse(response.parsed_output), usage: usageOf(response) };
+}
+
+const SVP_RULES = `Upravuješ hotový test pro žáky se speciálními vzdělávacími potřebami (SVP), například s dyslexií, poruchou pozornosti nebo slabší češtinou.
+
+Pravidla úpravy:
+- Zachovej obsah, učivo a cíl každé položky. Odpovědi musí zůstat správné a odpovídat nové podobě otázky.
+- Krátké a jednoduché věty, běžná slova, jedna informace ve větě. Žádné dvojité zápory ani chytáky.
+- Pokyn každé části napiš jako jednoduchý krok („Zakroužkuj…“, „Napiš…“) a přidej krátký příklad nebo nápovědu, jak úlohu řešit.
+- U výběru z možností nech nejvýš tři možnosti (A–C), správná odpověď je písmeno.
+- U otevřených otázek dej oporu: začátek odpovědi, nápovědné otázky nebo slova, která mají v odpovědi být.
+- U slovíček (překlady, přiřazování, doplňování) ponech stejná slovíčka a odpovědi, uprav jen pokyny.
+- Zachovej stejný počet částí a stejný počet položek v každé části, ve stejném pořadí.
+- Nadpis testu ponech, na listu se o SVP nepíše.`;
+
+/** The same test rewritten for students with special educational needs. */
+export async function adaptSheet(sheet: Sheet, meta: string): Promise<{ sheet: Sheet; usage: Usage }> {
+  const content = {
+    title: sheet.title,
+    instructions: sheet.instructions,
+    sections: sheet.sections.map((s) => ({
+      type: QUESTION_TYPES[s.type].label,
+      title: s.title,
+      instructions: s.instructions,
+      items: s.items,
+    })),
+  };
+  const response = await getClient().beta.messages.parse({
+    model: MODEL,
+    max_tokens: 16000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "medium", format: betaZodOutputFormat(GeneratedSchema) },
+    system: SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: `${SVP_RULES}\n\n${meta}\n\nPůvodní test:\n${JSON.stringify(content, null, 1)}`,
+      },
+    ],
+  });
+  if (response.stop_reason === "refusal") {
+    throw new Error("Úpravu se nepodařilo vytvořit, zkuste to znovu.");
+  }
+  if (response.stop_reason === "max_tokens" || !response.parsed_output) {
+    throw new Error("Úpravu se nepodařilo dokončit. Zkuste test s méně otázkami.");
+  }
+  const adapted = GeneratedSchema.parse(response.parsed_output);
+  // Structure, types and points stay the teacher's; a part Claude drops keeps its original items.
+  return {
+    sheet: {
+      ...sheet,
+      svp: true,
+      title: adapted.title || sheet.title,
+      instructions: adapted.instructions,
+      sections: sheet.sections.map((s, i) => {
+        const a = adapted.sections[i];
+        return a?.items.length
+          ? { ...s, title: a.title, instructions: a.instructions, items: a.items, hideBank: false }
+          : s;
+      }),
+    },
+    usage: usageOf(response),
+  };
 }

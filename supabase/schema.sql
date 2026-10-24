@@ -79,3 +79,55 @@ revoke all on function public.generations_left() from public, anon;
 revoke all on function public.consume_generation() from public, anon;
 grant execute on function public.generations_left() to authenticated;
 grant execute on function public.consume_generation() to authenticated;
+
+-- Folders in the Kabinet (by class or subject) and links for sharing a test with colleagues.
+alter table public.sheets add column if not exists folder text not null default '';
+alter table public.sheets add column if not exists share_id uuid unique;
+
+-- A shared test, for anyone who has its link. Only tests the teacher shared are reachable.
+create or replace function public.shared_sheet(share uuid)
+returns table (kind text, title text, meta text, data jsonb)
+language sql stable security definer set search_path = '' as $$
+  select s.kind, s.title, s.meta, s.data from public.sheets s where s.share_id = share
+$$;
+
+revoke all on function public.shared_sheet(uuid) from public;
+grant execute on function public.shared_sheet(uuid) to anon, authenticated;
+
+-- Every Claude call with its tokens, so the cost per test can be measured.
+create table if not exists public.claude_calls (
+  id bigint generated always as identity primary key,
+  user_id uuid not null default auth.uid() references auth.users on delete cascade,
+  kind text not null check (kind in ('generate', 'replace', 'svp')),
+  model text not null,
+  input_tokens int not null default 0,
+  output_tokens int not null default 0,
+  cache_read_tokens int not null default 0,
+  cache_write_tokens int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists claude_calls_created on public.claude_calls (created_at desc);
+
+alter table public.claude_calls enable row level security;
+
+drop policy if exists "Teachers log their calls" on public.claude_calls;
+create policy "Teachers log their calls" on public.claude_calls
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+
+drop policy if exists "Teachers read their calls" on public.claude_calls;
+create policy "Teachers read their calls" on public.claude_calls
+  for select to authenticated using ((select auth.uid()) = user_id);
+
+-- Cost overview for you as the operator: paste this into the SQL Editor on its own and Run.
+-- Prices in USD per million tokens for Claude Opus 5.5: input 4, output 20, cache read 0.20, cache write 5.
+--
+-- select (created_at at time zone 'Europe/Prague')::date as den,
+--        kind as druh,
+--        count(*) as volani,
+--        count(distinct user_id) as ucitelu,
+--        round(sum(input_tokens * 4 + output_tokens * 20 + cache_read_tokens * 0.2 + cache_write_tokens * 5) / 1e6, 2) as usd,
+--        round(sum(input_tokens * 4 + output_tokens * 20 + cache_read_tokens * 0.2 + cache_write_tokens * 5) / 1e6 / count(*), 3) as usd_za_volani
+-- from public.claude_calls
+-- group by 1, 2
+-- order by 1 desc, 2;

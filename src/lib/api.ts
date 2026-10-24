@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Usage } from "./generate";
 import { supabaseConfigured, supabaseForToken } from "./supabase";
 
 type Authorized = { supabase?: SupabaseClient; error?: Response };
@@ -32,6 +33,20 @@ export async function authorize(request: Request): Promise<Authorized> {
     };
   }
   return { supabase };
+}
+
+/** Logs one Claude call for the cost overview. A failed log never fails the teacher's request. */
+export async function recordUsage(supabase: SupabaseClient | undefined, kind: "generate" | "replace" | "svp", usage: Usage) {
+  if (!supabase) return;
+  const { error } = await supabase.from("claude_calls").insert({
+    kind,
+    model: usage.model,
+    input_tokens: usage.input,
+    output_tokens: usage.output,
+    cache_read_tokens: usage.cacheRead,
+    cache_write_tokens: usage.cacheWrite,
+  });
+  if (error) console.error("Supabase claude_calls", error.message);
 }
 
 /** Turns a failed Claude call into a message a teacher can act on. */

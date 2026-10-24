@@ -9,7 +9,7 @@ import {
   type Template,
 } from "@/lib/schemas";
 import { requestReplacement } from "@/lib/client-api";
-import { getSupabase, type SheetRow } from "@/lib/supabase";
+import { SHEET_ROW_COLUMNS, getSupabase, type SheetRow } from "@/lib/supabase";
 import { useAuth } from "./AuthProvider";
 import { LessonWizard } from "./LessonWizard";
 import { Sheet } from "./Sheet";
@@ -26,6 +26,9 @@ const dateFormat = new Intl.DateTimeFormat("cs-CZ", {
   month: "numeric",
   year: "numeric",
 });
+
+/** The folder picker's last option, which asks for a new folder name. */
+const NEW_FOLDER = "\u0000new";
 
 function Message({ children }: { children: React.ReactNode }) {
   return <p className="text-body-lg text-on-surface-variant">{children}</p>;
@@ -55,16 +58,17 @@ export function Kabinet() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [template, setTemplate] = useState<Template | null>(null);
+  const [folder, setFolder] = useState<string | null>(null);
 
   useEffect(() => {
     if (gate) return;
     getSupabase()
       .from("sheets")
-      .select("id, kind, title, meta, created_at, updated_at")
+      .select(SHEET_ROW_COLUMNS)
       .order("created_at", { ascending: false })
       .then(({ data, error }) => {
         if (error) setError(`Kabinet se nepodařilo načíst: ${error.message}`);
-        else setRows(data);
+        else setRows(data as SheetRow[]);
       });
   }, [gate]);
 
@@ -79,6 +83,17 @@ export function Kabinet() {
       .eq("id", row.id);
     if (error) setError(`Smazání se nepovedlo: ${error.message}`);
     else setRows((r) => r?.filter((x) => x.id !== row.id) ?? null);
+  }
+
+  async function moveTo(row: SheetRow, choice: string) {
+    let target = choice;
+    if (choice === NEW_FOLDER) {
+      target = window.prompt("Název nové složky, například 7.A nebo Angličtina:")?.trim() ?? "";
+      if (!target) return;
+    }
+    const { error } = await getSupabase().from("sheets").update({ folder: target }).eq("id", row.id);
+    if (error) setError(`Přesun se nepovedl: ${error.message}`);
+    else setRows((r) => r?.map((x) => (x.id === row.id ? { ...x, folder: target } : x)) ?? null);
   }
 
   async function startSimilar(row: SheetRow) {
@@ -129,9 +144,14 @@ export function Kabinet() {
       </Message>
     );
 
+  const folders = [...new Set(rows.map((r) => r.folder).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, "cs", { numeric: true }),
+  );
   const words = plain(query).split(/\s+/).filter(Boolean);
-  const found = rows.filter((row) =>
-    words.every((w) => plain(`${row.title} ${row.meta}`).includes(w)),
+  const found = rows.filter(
+    (row) =>
+      (folder === null || row.folder === folder) &&
+      words.every((w) => plain(`${row.title} ${row.meta} ${row.folder}`).includes(w)),
   );
 
   return (
@@ -143,6 +163,24 @@ export function Kabinet() {
         placeholder="Hledat podle názvu, předmětu nebo třídy"
         className="rounded-xl bg-surface-container-low px-4 py-3 text-body-lg text-on-surface outline-none focus:bg-surface-container"
       />
+      {folders.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {[null, ...folders].map((f) => (
+            <button
+              key={f ?? ""}
+              type="button"
+              onClick={() => setFolder(f)}
+              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+                folder === f
+                  ? "bg-secondary-container text-on-secondary-container"
+                  : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container"
+              }`}
+            >
+              {f ?? "Vše"}
+            </button>
+          ))}
+        </div>
+      )}
       {found.length === 0 && <Message>Nic takového v Kabinetu není.</Message>}
       <ul className="flex flex-col gap-3">
         {found.map((row) => (
@@ -152,16 +190,31 @@ export function Kabinet() {
           >
             <Link
               href={`/kabinet/${row.id}`}
-              className="flex min-w-0 flex-1 flex-col gap-1"
+              className="flex min-w-0 flex-1 basis-full flex-col gap-1 sm:basis-0"
             >
               <span className="truncate font-display text-title-md font-bold text-on-surface">
                 {row.title}
               </span>
               <span className="truncate text-label-md text-on-surface-variant">
+                {row.svp && <span className="font-medium text-primary-container">SVP · </span>}
                 {row.kind === "test" ? "Test" : "Pracovní list"} · {row.meta} ·{" "}
                 {dateFormat.format(new Date(row.created_at))}
               </span>
             </Link>
+            <select
+              value={row.folder}
+              onChange={(e) => moveTo(row, e.target.value)}
+              aria-label="Složka"
+              className="max-w-40 rounded-xl bg-transparent px-2 py-2 text-sm text-on-surface-variant hover:bg-secondary-container"
+            >
+              <option value="">Bez složky</option>
+              {folders.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+              <option value={NEW_FOLDER}>+ Nová složka…</option>
+            </select>
             <button
               type="button"
               onClick={() => startSimilar(row)}
@@ -194,13 +247,13 @@ export function SavedSheet({ id }: { id: string }) {
     if (gate) return;
     getSupabase()
       .from("sheets")
-      .select("id, kind, title, meta, created_at, updated_at, data")
+      .select(`${SHEET_ROW_COLUMNS}, data`)
       .eq("id", id)
       .maybeSingle()
       .then(({ data, error }) => {
         if (error) setError(`Test se nepodařilo načíst: ${error.message}`);
         else if (!data) setError("Tento test v Kabinetu není.");
-        else setRow(data);
+        else setRow(data as SheetRow & { data: SheetData });
       });
   }, [gate, id]);
 
