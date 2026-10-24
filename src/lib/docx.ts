@@ -168,11 +168,14 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
   const header = sheet.header ?? { meta: "", student: STUDENT_LINE };
   const starts = sectionStarts(sheet);
   const total = totalPoints(sheet);
+  // SVP sheets print larger and with more space between lines.
+  const scale = sheet.svp ? 1.2 : 1;
+  const sz = (halfPoints: number) => Math.round(halfPoints * scale);
 
   const children: (Paragraph | Table)[] = [
-    p([text(header.meta, { size: 16, color: MUTED })], 60),
-    p([text(header.student, { size: 18, color: MUTED })], 360),
-    p([text(sheet.title, { bold: true, size: 32 }), ...(showKey ? [text("  · klíč", { bold: true, size: 32, color: PRIMARY })] : [])], 80),
+    p([text(header.meta, { size: sz(16), color: MUTED })], 60),
+    p([text(header.student, { size: sz(18), color: MUTED })], 360),
+    p([text(sheet.title, { bold: true, size: sz(32) }), ...(showKey ? [text("  · klíč", { bold: true, size: sz(32), color: PRIMARY })] : [])], 80),
     p([text(sheet.instructions, { color: MUTED })], 360),
   ];
 
@@ -183,12 +186,12 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
         spacing: { before: 360, after: 40 },
         keepNext: true,
         children: [
-          text(`${LETTERS[si]}   `, { bold: true, color: PRIMARY, size: 24 }),
-          text(section.title, { bold: true, size: 24 }),
-          ...(showPoints ? [text(`\t___ / ${formatPoints(sectionPoints(section))}`, { size: 18, color: MUTED })] : []),
+          text(`${LETTERS[si]}   `, { bold: true, color: PRIMARY, size: sz(24) }),
+          text(section.title, { bold: true, size: sz(24) }),
+          ...(showPoints ? [text(`\t___ / ${formatPoints(sectionPoints(section))}`, { size: sz(18), color: MUTED })] : []),
         ],
       }),
-      p([text(section.instructions, { size: 20, color: MUTED })], 200, 400),
+      p([text(section.instructions, { size: sz(20), color: MUTED })], 200, 400),
       ...sectionItems(section, starts[si], showKey),
     );
   });
@@ -198,13 +201,20 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
       new Paragraph({
         alignment: AlignmentType.RIGHT,
         spacing: { before: 600 },
-        children: [text(`Body: ______ / ${formatPoints(total)}`, { bold: true, size: 24 })],
+        children: [text(`Body: ______ / ${formatPoints(total)}`, { bold: true, size: sz(24) })],
       }),
     );
   }
 
   const doc = new Document({
-    styles: { default: { document: { run: { font: "Calibri", size: 22 } } } },
+    styles: {
+      default: {
+        document: {
+          run: { font: "Calibri", size: sz(22) },
+          paragraph: sheet.svp ? { spacing: { line: 320 } } : {},
+        },
+      },
+    },
     sections: [
       {
         properties: {

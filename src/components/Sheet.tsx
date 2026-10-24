@@ -2,6 +2,8 @@
 
 import { createContext, use, useEffect, useMemo, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
+import { requestAdaptation } from "@/lib/client-api";
+import { ShareButton } from "./ShareButton";
 import {
   LETTERS,
   STUDENT_LINE,
@@ -407,6 +409,8 @@ export function Sheet({
   }, [doc, isB, twoVariants, variant]);
   const [busy, setBusy] = useState<string | null>(null);
   const [replaceError, setReplaceError] = useState<string | null>(null);
+  const [adapting, setAdapting] = useState(false);
+  const [adapted, setAdapted] = useState<{ sheet: SheetData; id: string | null } | null>(null);
 
   const updateSection = (si: number, patch: Partial<Section>) =>
     setDoc((d) => ({ ...d, sections: d.sections.map((s, j) => (j === si ? { ...s, ...patch } : s)) }));
@@ -444,6 +448,32 @@ export function Sheet({
     if (value > 0 && count > 0) updateSection(si, { points: value / count });
     else updateSection(si, {});
   };
+
+  async function adapt() {
+    setAdapting(true);
+    setReplaceError(null);
+    try {
+      const body = await requestAdaptation(doc, header.meta);
+      setAdapted({ sheet: body.sheet, id: body.id ?? null });
+    } catch (e) {
+      setReplaceError(e instanceof Error ? e.message : "Úpravu pro SVP se nepodařilo vytvořit.");
+    } finally {
+      setAdapting(false);
+    }
+  }
+
+  if (adapted) {
+    return (
+      <Sheet
+        result={adapted.sheet}
+        id={adapted.id}
+        meta={header.meta}
+        onBack={() => setAdapted(null)}
+        backLabel="Zpět na původní test"
+        onReplace={onReplace}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -487,6 +517,18 @@ export function Sheet({
         >
           Stáhnout Word
         </button>
+        {!doc.svp && (
+          <button
+            type="button"
+            onClick={adapt}
+            disabled={adapting}
+            title="Jednodušší zadání, nápovědy a větší písmo"
+            className="rounded-xl bg-surface-container-low px-5 py-3 font-medium text-primary-container transition-colors hover:bg-surface-container disabled:opacity-60"
+          >
+            {adapting ? "Upravuji pro SVP…" : "Verze pro SVP"}
+          </button>
+        )}
+        {id && <ShareButton id={id} />}
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-label-md text-on-surface-variant print:hidden">
         <label className={`flex items-center gap-2 ${isB ? "opacity-50" : ""}`}>
@@ -526,6 +568,12 @@ export function Sheet({
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
         </label>
+        {doc.svp && (
+          <span className="font-medium text-on-surface">
+            Verze pro žáky se SVP: jednodušší zadání, nápovědy a větší písmo.
+          </span>
+        )}
+        {adapting && <span>Úprava trvá asi minutu. Uloží se do Kabinetu jako nový test.</span>}
         <span>Text, hlavičku i body na listu můžete upravit kliknutím přímo do nich.</span>
         {replaceError && <span className="text-on-error-container">{replaceError}</span>}
         {id && (
@@ -537,7 +585,7 @@ export function Sheet({
 
       {/* A4 Digital Sheet */}
       <ReadOnly value={isB}>
-      <article className="mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none">
+      <article className={`${doc.svp ? "svp-sheet " : ""}mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none`}>
         <div className="mb-8 flex flex-wrap justify-between gap-4 text-label-md text-on-surface-variant">
           <Editable value={header.meta} onChange={(v) => setDoc((d) => ({ ...d, header: { ...header, meta: v } }))} />
           <Editable

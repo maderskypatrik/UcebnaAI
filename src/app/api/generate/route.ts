@@ -1,6 +1,6 @@
 import { generate } from "@/lib/generate";
 import { MAX_ITEMS, QUESTION_TYPE_IDS, type SectionSpec } from "@/lib/schemas";
-import { authorize, errorResponse } from "@/lib/api";
+import { authorize, errorResponse, recordUsage } from "@/lib/api";
 
 // Generating from a long PDF can take a minute or two.
 export const maxDuration = 300;
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const sheet = await generate({
+    const { sheet, usage } = await generate({
       output: text("output") === "worksheet" ? "worksheet" : "test",
       school: text("school"),
       grade: text("grade"),
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
     };
     if (!supabase) return Response.json({ sheet });
 
+    await recordUsage(supabase, "generate", usage);
     const { data: left } = await supabase.rpc("consume_generation");
     const { data: saved, error } = await supabase
       .from("sheets")

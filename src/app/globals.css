@@ -68,6 +68,20 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-outline-variant) 15%, transparent);
 }
 
+/* Sheets for students with special educational needs: the same layout in larger, airier print. */
+.svp-sheet {
+  --text-sm: 1.0625rem;
+  --text-sm--line-height: 1.7;
+  --text-label-md: 0.875rem;
+  --text-body-lg: 1.1875rem;
+  --text-body-lg--line-height: 1.75;
+  --text-title-md: 1.1875rem;
+  --text-title-lg: 1.625rem;
+  font-size: 1.1875rem;
+  line-height: 1.75;
+  letter-spacing: 0.01em;
+}
+
 body {
   background: var(--color-surface);
   color: var(--color-on-surface);

@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { takeReturn } from "@/lib/return-to";
 import { getSupabase, oauthProviders } from "@/lib/supabase";
 import { AssistantButton } from "./AssistantButton";
 import { useAuth } from "./AuthProvider";
@@ -16,9 +18,9 @@ export function LoginForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Signed in (also right after returning from Google or Microsoft): continue to the app.
+  // Signed in (also right after returning from Google or Microsoft): continue where the teacher was going.
   useEffect(() => {
-    if (session) router.replace("/");
+    if (session) router.replace(takeReturn());
   }, [session, router]);
 
   if (!enabled) {
@@ -99,6 +101,13 @@ export function LoginForm() {
         </AssistantButton>
         {error && <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">{error}</p>}
       </form>
+      <p className="text-label-md text-on-surface-variant">
+        Jak nakládáme s vaším e-mailem a testy, popisuje{" "}
+        <Link href="/ochrana-osobnich-udaju" className="font-medium text-primary-container">
+          ochrana osobních údajů
+        </Link>
+        .
+      </p>
     </div>
   );
 }

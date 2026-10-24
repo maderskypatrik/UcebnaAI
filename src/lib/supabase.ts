@@ -35,6 +35,13 @@ export type SheetRow = {
   kind: "test" | "worksheet";
   title: string;
   meta: string;
+  /** Kabinet folder, e.g. a class or subject; empty when the test is in none. */
+  folder: string;
+  /** Adapted for students with special educational needs. */
+  svp: boolean | null;
   created_at: string;
   updated_at: string;
 };
+
+/** Columns for SheetRow; `svp` is read from inside the saved sheet. */
+export const SHEET_ROW_COLUMNS = "id, kind, title, meta, folder, svp:data->svp, created_at, updated_at";
