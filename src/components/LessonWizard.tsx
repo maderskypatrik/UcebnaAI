@@ -13,9 +13,10 @@ import {
 } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
-import { postForm, requestReplacement } from "@/lib/client-api";
+import { requestGeneration, requestReplacement, requestSection } from "@/lib/client-api";
 import { formatSize, shrinkImage } from "@/lib/shrink-image";
 import Link from "next/link";
+import { saveLastSettings, useLastSettings } from "@/lib/last-settings";
 import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
 
@@ -59,8 +60,40 @@ function Option({
   );
 }
 
-/** The three-step wizard; a template from the Kabinet pre-fills everything but the materials. */
+/** What Claude is doing while the teacher waits, with the questions written so far. */
+function GenerationProgress({ done, total }: { done: number; total: number }) {
+  const label =
+    done === 0
+      ? "Claude čte podklady a vybírá učivo…"
+      : done < total
+        ? `Hotovo ${done} z ${total} otázek…`
+        : "Kontroluji klíč a ukládám…";
+  // Reading the materials takes the first share of the time, so the bar starts there.
+  const share = done === 0 ? 0.1 : 0.15 + 0.8 * Math.min(done / total, 1);
+  return (
+    <span className="flex min-w-56 flex-1 flex-col gap-1.5" role="status">
+      <span className="text-sm text-on-surface-variant">{label}</span>
+      <span className="h-1.5 overflow-hidden rounded-full bg-surface-container">
+        <span
+          className="bg-assistant block h-full rounded-full transition-[width] duration-500"
+          style={{ width: `${Math.round(share * 100)}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The three-step wizard. A template from the Kabinet pre-fills everything but the materials;
+ * without one, the wizard starts from the teacher's last settings on this device.
+ */
 export function LessonWizard({ template }: { template?: Template }) {
+  const last = useLastSettings();
+  const start = template ?? last ?? undefined;
+  return <Wizard key={template ? "template" : last ? "last" : "new"} template={start} remembered={!template && !!last} />;
+}
+
+function Wizard({ template, remembered }: { template?: Template; remembered: boolean }) {
   const [step, setStep] = useState(template?.schoolId && template.grade ? 1 : 0);
   const [schoolId, setSchoolId] = useState<string | null>(template?.schoolId || null);
   const [grade, setGrade] = useState<string | null>(template?.grade || null);
@@ -79,6 +112,7 @@ export function LessonWizard({ template }: { template?: Template }) {
   const [url, setUrl] = useState("");
   const [difficulty, setDifficulty] = useState(template?.difficulty ?? "Střední");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ sheet: SheetData; id: string | null } | null>(null);
   const [left, setLeft] = useState<number | null>(null);
@@ -121,6 +155,7 @@ export function LessonWizard({ template }: { template?: Template }) {
 
   async function submit() {
     setLoading(true);
+    setProgress(0);
     setError(null);
     const form = new FormData();
     form.set("output", output);
@@ -137,8 +172,17 @@ export function LessonWizard({ template }: { template?: Template }) {
     form.set("meta", meta);
     files.forEach((f) => form.append("files", f));
     try {
-      const body = await postForm<{ sheet: SheetData; id?: string; left?: number }>("/api/generate", form);
+      const body = await requestGeneration(form, setProgress);
       setResult({ sheet: body.sheet as SheetData, id: body.id ?? null });
+      saveLastSettings({
+        schoolId: schoolId ?? "",
+        grade: grade ?? "",
+        subject,
+        difficulty,
+        instructionLanguage: language,
+        output,
+        sections,
+      });
       if (typeof body.left === "number") setLeft(body.left);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generování se nepovedlo.");
@@ -155,6 +199,7 @@ export function LessonWizard({ template }: { template?: Template }) {
         meta={meta}
         onBack={() => setResult(null)}
         onReplace={(args) => requestReplacement({ ...args, files, url })}
+        onAddSection={(args) => requestSection({ ...args, files, url })}
       />
     );
   }
@@ -258,6 +303,20 @@ export function LessonWizard({ template }: { template?: Template }) {
 
       {step === 1 && (
         <div className="flex flex-col gap-6">
+          {remembered && (
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-on-surface-variant">
+              <span>
+                Stejně jako minule: <strong className="text-on-surface">{meta}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setStep(0)}
+                className="font-medium text-primary-container hover:underline"
+              >
+                Změnit
+              </button>
+            </p>
+          )}
           <label className="flex flex-col gap-2">
             <span className="text-label-md text-on-surface-variant">Zadejte téma hodiny</span>
             <input
@@ -527,9 +586,7 @@ export function LessonWizard({ template }: { template?: Template }) {
                 : "Vytvořit pracovní list"}
           </AssistantButton>
         )}
-        {loading && (
-          <span className="text-sm text-on-surface-variant">Obvykle to trvá do minuty.</span>
-        )}
+        {loading && <GenerationProgress done={progress} total={itemCount} />}
         {!loading && left !== null && (
           <span className="text-sm text-on-surface-variant">Dnes můžete vytvořit ještě {left}×.</span>
         )}

@@ -98,7 +98,7 @@ grant execute on function public.shared_sheet(uuid) to anon, authenticated;
 create table if not exists public.claude_calls (
   id bigint generated always as identity primary key,
   user_id uuid not null default auth.uid() references auth.users on delete cascade,
-  kind text not null check (kind in ('generate', 'replace', 'svp')),
+  kind text not null,
   model text not null,
   input_tokens int not null default 0,
   output_tokens int not null default 0,
@@ -106,6 +106,11 @@ create table if not exists public.claude_calls (
   cache_write_tokens int not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Which kinds of calls are logged; extended when a feature adds a new one.
+alter table public.claude_calls drop constraint if exists claude_calls_kind_check;
+alter table public.claude_calls add constraint claude_calls_kind_check
+  check (kind in ('generate', 'replace', 'svp', 'section'));
 
 create index if not exists claude_calls_created on public.claude_calls (created_at desc);
 
@@ -118,6 +123,29 @@ create policy "Teachers log their calls" on public.claude_calls
 drop policy if exists "Teachers read their calls" on public.claude_calls;
 create policy "Teachers read their calls" on public.claude_calls
   for select to authenticated using ((select auth.uid()) = user_id);
+
+-- Thumbs up or down on single questions, to see where Claude's questions need to get better.
+create table if not exists public.question_feedback (
+  id bigint generated always as identity primary key,
+  user_id uuid not null default auth.uid() references auth.users on delete cascade,
+  rating smallint not null check (rating in (-1, 1)),
+  question_type text not null,
+  item jsonb not null,
+  sheet_title text not null default '',
+  meta text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.question_feedback enable row level security;
+
+drop policy if exists "Teachers rate questions" on public.question_feedback;
+create policy "Teachers rate questions" on public.question_feedback
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+
+-- Questions teachers disliked, newest first: paste on its own into the SQL Editor and Run.
+--
+-- select created_at, meta, question_type, item->>'prompt' as otazka, item->>'answer' as odpoved
+-- from public.question_feedback where rating = -1 order by created_at desc limit 100;
 
 -- Cost overview for you as the operator: paste this into the SQL Editor on its own and Run.
 -- Prices in USD per million tokens for Claude Opus 5.5: input 4, output 20, cache read 0.20, cache write 5.

@@ -8,7 +8,7 @@ import {
   type Sheet as SheetData,
   type Template,
 } from "@/lib/schemas";
-import { requestReplacement } from "@/lib/client-api";
+import { requestReplacement, requestSection } from "@/lib/client-api";
 import { SHEET_ROW_COLUMNS, getSupabase, type SheetRow } from "@/lib/supabase";
 import { useAuth } from "./AuthProvider";
 import { LessonWizard } from "./LessonWizard";
@@ -59,6 +59,9 @@ export function Kabinet() {
   const [query, setQuery] = useState("");
   const [template, setTemplate] = useState<Template | null>(null);
   const [folder, setFolder] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [merging, setMerging] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     if (gate) return;
@@ -88,12 +91,76 @@ export function Kabinet() {
   async function moveTo(row: SheetRow, choice: string) {
     let target = choice;
     if (choice === NEW_FOLDER) {
-      target = window.prompt("Název nové složky, například 7.A nebo Angličtina:")?.trim() ?? "";
+      target =
+        window
+          .prompt("Název nové složky, například 7.A nebo Angličtina:")
+          ?.trim() ?? "";
       if (!target) return;
     }
-    const { error } = await getSupabase().from("sheets").update({ folder: target }).eq("id", row.id);
+    const { error } = await getSupabase()
+      .from("sheets")
+      .update({ folder: target })
+      .eq("id", row.id);
     if (error) setError(`Přesun se nepovedl: ${error.message}`);
-    else setRows((r) => r?.map((x) => (x.id === row.id ? { ...x, folder: target } : x)) ?? null);
+    else
+      setRows(
+        (r) =>
+          r?.map((x) => (x.id === row.id ? { ...x, folder: target } : x)) ??
+          null,
+      );
+  }
+
+  /** Puts the chosen tests one after another into a new test, in the order they were ticked. */
+  async function merge() {
+    setMerging(true);
+    const { data, error } = await getSupabase()
+      .from("sheets")
+      .select("id, meta, data")
+      .in("id", selected);
+    if (error || !data) {
+      setMerging(false);
+      return setError(`Testy se nepodařilo načíst: ${error?.message}`);
+    }
+    const sheets = selected
+      .map((id) => data.find((d) => d.id === id))
+      .filter((d): d is { id: string; meta: string; data: SheetData } =>
+        Boolean(d),
+      );
+    const sections = sheets.flatMap((d) => d.data.sections);
+    if (sections.length > 8) {
+      setMerging(false);
+      return window.alert(
+        `Spojený test by měl ${sections.length} částí, nejvýš jde 8. Vyberte méně testů.`,
+      );
+    }
+    const first = sheets[0].data;
+    const merged: SheetData = {
+      ...first,
+      kind: sheets.some((d) => d.data.kind === "test") ? "test" : "worksheet",
+      title: sheets
+        .map((d) => d.data.title)
+        .join(" + ")
+        .slice(0, 120),
+      sections,
+      svp: undefined,
+    };
+    const { data: saved, error: saveError } = await getSupabase()
+      .from("sheets")
+      .insert({
+        kind: merged.kind,
+        title: merged.title,
+        meta: sheets[0].meta,
+        folder: folder ?? "",
+        data: merged,
+      })
+      .select("id")
+      .single();
+    setMerging(false);
+    if (saveError)
+      return setError(
+        `Spojený test se nepodařilo uložit: ${saveError.message}`,
+      );
+    router.push(`/kabinet/${saved.id}`);
   }
 
   async function startSimilar(row: SheetRow) {
@@ -144,14 +211,16 @@ export function Kabinet() {
       </Message>
     );
 
-  const folders = [...new Set(rows.map((r) => r.folder).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b, "cs", { numeric: true }),
+  const folders = [...new Set(rows.map((r) => r.folder).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b, "cs", { numeric: true }),
   );
   const words = plain(query).split(/\s+/).filter(Boolean);
   const found = rows.filter(
     (row) =>
       (folder === null || row.folder === folder) &&
-      words.every((w) => plain(`${row.title} ${row.meta} ${row.folder}`).includes(w)),
+      words.every((w) =>
+        plain(`${row.title} ${row.meta} ${row.folder}`).includes(w),
+      ),
   );
 
   return (
@@ -182,25 +251,71 @@ export function Kabinet() {
         </div>
       )}
       {found.length === 0 && <Message>Nic takového v Kabinetu není.</Message>}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-secondary-container/60 px-5 py-3 text-sm">
+          <span className="text-on-surface">
+            {selected.length === 1
+              ? "Vyberte ještě aspoň jeden test, se kterým ho spojit."
+              : `Vybráno ${selected.length}. Části se seřadí v pořadí, v jakém jste testy vybrali.`}
+          </span>
+          {selected.length > 1 && (
+            <button
+              type="button"
+              onClick={merge}
+              disabled={merging}
+              className="bg-assistant rounded-lg px-4 py-1.5 font-medium text-on-primary disabled:opacity-60"
+            >
+              {merging ? "Spojuji…" : "Spojit do nového testu"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setSelected([])}
+            className="text-on-surface-variant hover:underline"
+          >
+            Zrušit výběr
+          </button>
+        </div>
+      )}
       <ul className="flex flex-col gap-3">
         {found.map((row) => (
           <li
             key={row.id}
             className="flex flex-wrap items-center gap-4 rounded-xl bg-surface-container-low px-5 py-4 transition-colors hover:bg-surface-container"
           >
-            <Link
-              href={`/kabinet/${row.id}`}
-              className="flex min-w-0 flex-1 basis-full flex-col gap-1 sm:basis-0"
-            >
-              <span className="truncate font-display text-title-md font-bold text-on-surface">
-                {row.title}
-              </span>
-              <span className="truncate text-label-md text-on-surface-variant">
-                {row.svp && <span className="font-medium text-primary-container">SVP · </span>}
-                {row.kind === "test" ? "Test" : "Pracovní list"} · {row.meta} ·{" "}
-                {dateFormat.format(new Date(row.created_at))}
-              </span>
-            </Link>
+            <div className="flex min-w-0 flex-1 basis-full items-center gap-4 sm:basis-0">
+              <input
+                type="checkbox"
+                checked={selected.includes(row.id)}
+                onChange={(e) =>
+                  setSelected((s) =>
+                    e.target.checked
+                      ? [...s, row.id]
+                      : s.filter((id) => id !== row.id),
+                  )
+                }
+                aria-label={`Vybrat ke spojení: ${row.title}`}
+                title="Vybrat ke spojení s jiným testem"
+                className="size-4 shrink-0"
+              />
+              <Link
+                href={`/kabinet/${row.id}`}
+                className="flex min-w-0 flex-1 flex-col gap-1"
+              >
+                <span className="truncate font-display text-title-md font-bold text-on-surface">
+                  {row.title}
+                </span>
+                <span className="truncate text-label-md text-on-surface-variant">
+                  {row.svp && (
+                    <span className="font-medium text-primary-container">
+                      SVP ·{" "}
+                    </span>
+                  )}
+                  {row.kind === "test" ? "Test" : "Pracovní list"} · {row.meta}{" "}
+                  · {dateFormat.format(new Date(row.created_at))}
+                </span>
+              </Link>
+            </div>
             <select
               value={row.folder}
               onChange={(e) => moveTo(row, e.target.value)}
@@ -273,6 +388,7 @@ export function SavedSheet({ id }: { id: string }) {
       onBack={() => router.push("/kabinet")}
       backLabel="Zpět do Kabinetu"
       onReplace={requestReplacement}
+      onAddSection={requestSection}
     />
   );
 }

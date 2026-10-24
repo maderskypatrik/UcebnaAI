@@ -1,9 +1,11 @@
 "use client";
 
-import { createContext, use, useEffect, useMemo, useState } from "react";
-import { getSupabase } from "@/lib/supabase";
+import { createContext, use, useCallback, useEffect, useMemo, useState } from "react";
+import { getSupabase, supabaseConfigured } from "@/lib/supabase";
 import { requestAdaptation } from "@/lib/client-api";
+import { ExportMenu } from "./ExportMenu";
 import { ShareButton } from "./ShareButton";
+import { useAuth } from "./AuthProvider";
 import {
   LETTERS,
   STUDENT_LINE,
@@ -15,8 +17,12 @@ import {
   totalPoints,
   variantB,
   wordBank,
+  QUESTION_TYPES,
+  QUESTION_TYPE_IDS,
   type Item,
+  type QuestionType,
   type Section,
+  type SectionSpec,
   type Sheet as SheetData,
 } from "@/lib/schemas";
 
@@ -284,6 +290,73 @@ function Written({ section, start, showKey, onItem, tools, lines }: ItemProps & 
 }
 
 /** A blank question of the section's type for the teacher to fill in. */
+type Rating = 1 | -1;
+
+/** Saves a teacher's thumbs up or down on one question, for improving the prompts later. */
+async function rateItem(rating: Rating, item: Item, type: Section["type"], title: string, meta: string) {
+  if (!supabaseConfigured) return;
+  const { error } = await getSupabase()
+    .from("question_feedback")
+    .insert({ rating, item, question_type: type, sheet_title: title, meta });
+  if (error) console.error("Feedback", error.message);
+}
+
+/** Lets the teacher ask for one more part of the test: its question type, count and points. */
+function AddSection({ onAdd }: { onAdd: (spec: SectionSpec) => Promise<void> }) {
+  const [type, setType] = useState<QuestionType>("multiple_choice");
+  const [count, setCount] = useState(5);
+  const [points, setPoints] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const field = "rounded-lg bg-surface-container-lowest px-2 py-1.5 text-sm text-on-surface";
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant print:hidden">
+      <span className="font-medium text-on-surface">Přidat část:</span>
+      <select value={type} onChange={(e) => setType(e.target.value as QuestionType)} className={field}>
+        {QUESTION_TYPE_IDS.map((id) => (
+          <option key={id} value={id}>
+            {QUESTION_TYPES[id].label}
+          </option>
+        ))}
+      </select>
+      <label className="flex items-center gap-1">
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={count}
+          onChange={(e) => setCount(Number(e.target.value))}
+          className={`${field} w-16`}
+        />
+        položek
+      </label>
+      <label className="flex items-center gap-1">
+        po
+        <input
+          type="number"
+          min={0.5}
+          max={20}
+          step={0.5}
+          value={points}
+          onChange={(e) => setPoints(Number(e.target.value))}
+          className={`${field} w-16`}
+        />
+        b
+      </label>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          await onAdd({ type, count, points }).finally(() => setBusy(false));
+        }}
+        className="bg-assistant rounded-lg px-4 py-1.5 font-medium text-on-primary disabled:opacity-60"
+      >
+        {busy ? "Claude píše…" : "Vytvořit část"}
+      </button>
+    </div>
+  );
+}
+
 function blankItem(type: Section["type"]): Item {
   if (type === "multiple_choice") return { prompt: "Nová otázka", options: ["…", "…", "…", "…"], answer: "A" };
   if (type === "true_false") return { prompt: "Nové tvrzení", options: [], answer: "P" };
@@ -294,15 +367,34 @@ function ItemTools({
   busy,
   onReplace,
   onRemove,
+  rating,
+  onRate,
 }: {
   busy: boolean;
   onReplace?: () => void;
   onRemove: () => void;
+  rating?: Rating;
+  onRate?: (rating: Rating) => void;
 }) {
   const button =
     "rounded-lg px-2 py-1 text-label-md font-medium transition-colors disabled:opacity-50 print:hidden";
   return (
     <span className="flex shrink-0 items-center gap-1 self-start print:hidden">
+      {onRate &&
+        ([1, -1] as const).map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => onRate(r)}
+            aria-pressed={rating === r}
+            title={r === 1 ? "Dobrá otázka" : "Slabá otázka (pomůže nám zlepšit Clauda)"}
+            className={`${button} ${
+              rating === r ? "bg-secondary-container text-primary-container" : "text-on-surface-variant hover:bg-surface-container-low"
+            }`}
+          >
+            {r === 1 ? "👍" : "👎"}
+          </button>
+        ))}
       {onReplace && (
         <button
           type="button"
@@ -347,6 +439,40 @@ function SectionItems(props: ItemProps) {
   }
 }
 
+/** The sheet with a history of edits, so the teacher can step back. */
+function useUndoable<T>(initial: T) {
+  const [state, setState] = useState<{ doc: T; past: T[] }>({ doc: initial, past: [] });
+  const setDoc = useCallback((change: T | ((doc: T) => T)) => {
+    setState((s) => {
+      const next = typeof change === "function" ? (change as (doc: T) => T)(s.doc) : change;
+      // Leaving a field without changing it still reports its text; that is not an edit.
+      if (JSON.stringify(next) === JSON.stringify(s.doc)) return s;
+      return { doc: next, past: [...s.past.slice(-49), s.doc] };
+    });
+  }, []);
+  const undo = useCallback(
+    () => setState((s) => (s.past.length ? { doc: s.past[s.past.length - 1], past: s.past.slice(0, -1) } : s)),
+    [],
+  );
+  const canUndo = state.past.length > 0;
+
+  // Ctrl+Z / Cmd+Z outside a text field steps back; inside one the browser undoes the typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo]);
+
+  return { doc: state.doc, setDoc, undo, canUndo };
+}
+
 type SaveState = "saved" | "saving" | "error";
 
 /** Saves edits to the Kabinet a moment after the teacher stops typing. */
@@ -381,17 +507,24 @@ export function Sheet({
   onBack,
   backLabel = "Zpět k nastavení",
   onReplace,
+  onAddSection,
 }: {
   result: SheetData;
   /** Kabinet id; when set, edits are saved automatically. */
   id?: string | null;
   meta: string;
-  onBack: () => void;
+  /** Without it there is no back button, as in the sample on the home page. */
+  onBack?: () => void;
   backLabel?: string;
   /** Asks the AI for one new question in place of the one at `index`. */
   onReplace?: (args: { section: Section; index: number; title: string; meta: string }) => Promise<Item>;
+  /** Asks the AI for one more part of the test. */
+  onAddSection?: (args: { sheet: SheetData; spec: SectionSpec; meta: string }) => Promise<Section>;
 }) {
-  const [doc, setDoc] = useState<SheetData>({ ...result, header: result.header ?? { meta, student: STUDENT_LINE } });
+  const { doc, setDoc, undo, canUndo } = useUndoable<SheetData>({
+    ...result,
+    header: result.header ?? { meta, student: STUDENT_LINE },
+  });
   const saveState = useAutosave(id, doc);
   const header = doc.header ?? { meta, student: STUDENT_LINE };
   const [showKey, setShowKey] = useState(false);
@@ -410,6 +543,8 @@ export function Sheet({
   const [busy, setBusy] = useState<string | null>(null);
   const [replaceError, setReplaceError] = useState<string | null>(null);
   const [adapting, setAdapting] = useState(false);
+  const [ratings, setRatings] = useState<Record<string, Rating>>({});
+  const auth = useAuth();
   const [adapted, setAdapted] = useState<{ sheet: SheetData; id: string | null } | null>(null);
 
   const updateSection = (si: number, patch: Partial<Section>) =>
@@ -471,6 +606,7 @@ export function Sheet({
         onBack={() => setAdapted(null)}
         backLabel="Zpět na původní test"
         onReplace={onReplace}
+        onAddSection={onAddSection}
       />
     );
   }
@@ -478,13 +614,15 @@ export function Sheet({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center gap-3 print:hidden">
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded-xl px-3 py-3 font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
-        >
-          {backLabel}
-        </button>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="rounded-xl px-3 py-3 font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+          >
+            {backLabel}
+          </button>
+        )}
         <div className="flex rounded-xl bg-surface-container-low p-1">
           {[false, true].map((key) => (
             <button
@@ -506,18 +644,8 @@ export function Sheet({
         >
           Tisk / PDF
         </button>
-        <button
-          type="button"
-          onClick={async () => {
-            // Loaded on demand so the Word library doesn't slow down the first page load.
-            const { downloadDocx } = await import("@/lib/docx");
-            await downloadDocx(shown, { showKey, showPoints });
-          }}
-          className="rounded-xl bg-surface-container-low px-5 py-3 font-medium text-primary-container transition-colors hover:bg-surface-container"
-        >
-          Stáhnout Word
-        </button>
-        {!doc.svp && (
+        <ExportMenu sheet={shown} showKey={showKey} showPoints={showPoints} />
+        {!doc.svp && (!auth.enabled || auth.session) && (
           <button
             type="button"
             onClick={adapt}
@@ -531,6 +659,15 @@ export function Sheet({
         {id && <ShareButton id={id} />}
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-label-md text-on-surface-variant print:hidden">
+        <button
+          type="button"
+          onClick={undo}
+          disabled={!canUndo}
+          title="Vrátit poslední úpravu (Ctrl+Z)"
+          className="rounded-lg px-2 py-0.5 font-medium text-primary-container hover:bg-surface-container-low disabled:text-on-surface-variant disabled:opacity-50"
+        >
+          ↶ Vrátit úpravu
+        </button>
         <label className={`flex items-center gap-2 ${isB ? "opacity-50" : ""}`}>
           <input
             type="checkbox"
@@ -637,6 +774,15 @@ export function Sheet({
                       busy={busy === `${si}-${ii}`}
                       onReplace={onReplace && (() => replace(si, ii))}
                       onRemove={() => setItems(si, (items) => items.filter((_, k) => k !== ii))}
+                      rating={ratings[`${si}-${section.items[ii].prompt}`]}
+                      onRate={
+                        auth.session
+                          ? (r) => {
+                              setRatings((x) => ({ ...x, [`${si}-${section.items[ii].prompt}`]: r }));
+                              rateItem(r, section.items[ii], section.type, doc.title, header.meta);
+                            }
+                          : undefined
+                      }
                     />
                   )
                 }
@@ -652,6 +798,19 @@ export function Sheet({
               )}
             </section>
           ))}
+          {editing && onAddSection && doc.sections.length < 8 && (
+            <AddSection
+              onAdd={async (spec) => {
+                setReplaceError(null);
+                try {
+                  const section = await onAddSection({ sheet: doc, spec, meta: header.meta });
+                  setDoc((d) => ({ ...d, sections: [...d.sections, section] }));
+                } catch (e) {
+                  setReplaceError(e instanceof Error ? e.message : "Novou část se nepodařilo vytvořit.");
+                }
+              }}
+            />
+          )}
         </div>
 
         {showPoints && (

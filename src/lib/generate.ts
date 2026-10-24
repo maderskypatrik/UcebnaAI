@@ -71,9 +71,12 @@ function getClient(): Anthropic {
   return client;
 }
 
-export async function generate(input: GenerateInput): Promise<{ sheet: Sheet; usage: Usage }> {
+/** Called while Claude writes, with how many questions are done so far. */
+export type OnProgress = (done: number) => void;
+
+export async function generate(input: GenerateInput, onProgress?: OnProgress): Promise<{ sheet: Sheet; usage: Usage }> {
   const materials = await materialsToBlocks(input.files, input.url);
-  const response = await getClient().beta.messages.parse({
+  const stream = getClient().beta.messages.stream({
     model: MODEL,
     max_tokens: 16000,
     betas: ["server-side-fallback-2026-07-01"],
@@ -82,6 +85,13 @@ export async function generate(input: GenerateInput): Promise<{ sheet: Sheet; us
     system: SYSTEM,
     messages: [{ role: "user", content: [...materials, { type: "text", text: taskPrompt(input) }] }],
   });
+  // Each finished question in the JSON so far has its "prompt" key; enough to show the teacher progress.
+  let done = 0;
+  stream.on("text", (_, snapshot) => {
+    const count = snapshot.split('"prompt"').length - 2;
+    if (count > done) onProgress?.((done = count));
+  });
+  const response = await stream.finalMessage();
 
   if (response.stop_reason === "refusal") {
     throw new Error("Claude tento obsah odmítl zpracovat. Zkuste jiné podklady.");
@@ -164,6 +174,62 @@ Napiš jednu novou položku místo té označené „NAHRADIT“. Musí být jin
     throw new Error("Novou otázku se nepodařilo vytvořit, zkuste to znovu.");
   }
   return { item: ItemSchema.parse(response.parsed_output), usage: usageOf(response) };
+}
+
+const SectionSchema = GeneratedSchema.shape.sections.element;
+
+export type SectionInput = {
+  meta: string;
+  sheet: Sheet;
+  spec: SectionSpec;
+  url: string;
+  files: File[];
+};
+
+/** One more part for a finished test, on the same topic and not repeating its questions. */
+export async function addSection(input: SectionInput): Promise<{ section: Section; usage: Usage }> {
+  const materials = await materialsToBlocks(input.files, input.url);
+  const t = QUESTION_TYPES[input.spec.type];
+  const existing = input.sheet.sections
+    .map((s) => `„${s.title}“: ${s.items.map((item) => item.prompt).join(" | ")}`)
+    .join("\n");
+  const source = materials.length
+    ? "Vycházej jen z přiložených podkladů."
+    : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně stávajících částí.";
+  const response = await getClient().beta.messages.parse({
+    model: MODEL,
+    max_tokens: 8000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "medium", format: betaZodOutputFormat(SectionSchema) },
+    system: SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...materials,
+          {
+            type: "text",
+            text: `${input.meta}. ${input.sheet.kind === "test" ? "Test" : "Pracovní list"}: ${input.sheet.title}.
+
+Stávající části a jejich otázky:
+${existing}
+
+Napiš jednu novou část: ${t.label}, přesně ${input.spec.count} položek. ${t.prompt}
+Otázky se nesmí opakovat se stávajícími. Část má krátký nadpis bez písmena a jednovětý pokyn pro žáky, ve stejném jazyce jako nadpisy stávajících částí. ${source}`,
+          },
+        ],
+      },
+    ],
+  });
+  if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens" || !response.parsed_output) {
+    throw new Error("Novou část se nepodařilo vytvořit, zkuste to znovu.");
+  }
+  const section = SectionSchema.parse(response.parsed_output);
+  return {
+    section: { ...section, type: input.spec.type, points: input.spec.points },
+    usage: usageOf(response),
+  };
 }
 
 const SVP_RULES = `Upravuješ hotový test pro žáky se speciálními vzdělávacími potřebami (SVP), například s dyslexií, poruchou pozornosti nebo slabší češtinou.
