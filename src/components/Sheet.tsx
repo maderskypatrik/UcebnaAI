@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, use, useEffect, useMemo, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
 import {
   LETTERS,
@@ -11,14 +11,19 @@ import {
   sectionPoints,
   sectionStarts,
   totalPoints,
+  variantB,
   wordBank,
   type Item,
   type Section,
   type Sheet as SheetData,
 } from "@/lib/schemas";
 
+/** True while variant B is shown: it is derived from A, so it is read only. */
+const ReadOnly = createContext(false);
+
 /** A field that looks like printed text but can be edited in place. */
 function Editable(props: { value: string; onChange: (value: string) => void; className?: string }) {
+  if (use(ReadOnly)) return <span className={props.className}>{props.value}</span>;
   // Remount when the value changes from outside (a replaced or removed question),
   // so the browser's edited text never lingers over the new value.
   return <EditableText key={props.value} {...props} />;
@@ -391,7 +396,15 @@ export function Sheet({
   const isTest = doc.kind === "test";
   const [showPoints, setShowPoints] = useState(isTest);
   const total = totalPoints(doc);
-  const [editing, setEditing] = useState(false);
+  const [editingOn, setEditing] = useState(false);
+  const [twoVariants, setTwoVariants] = useState(false);
+  const [variant, setVariant] = useState<"A" | "B">("A");
+  const isB = twoVariants && variant === "B";
+  const editing = editingOn && !isB;
+  const shown = useMemo(() => {
+    const sheet = isB ? variantB(doc) : doc;
+    return twoVariants ? { ...sheet, title: `${sheet.title} – varianta ${variant}` } : sheet;
+  }, [doc, isB, twoVariants, variant]);
   const [busy, setBusy] = useState<string | null>(null);
   const [replaceError, setReplaceError] = useState<string | null>(null);
 
@@ -405,7 +418,7 @@ export function Sheet({
       ),
     }));
 
-  const starts = sectionStarts(doc);
+  const starts = sectionStarts(shown);
 
   const setItems = (si: number, change: (items: Item[]) => Item[]) =>
     setDoc((d) => ({ ...d, sections: d.sections.map((s, j) => (j === si ? { ...s, items: change(s.items) } : s)) }));
@@ -468,7 +481,7 @@ export function Sheet({
           onClick={async () => {
             // Loaded on demand so the Word library doesn't slow down the first page load.
             const { downloadDocx } = await import("@/lib/docx");
-            await downloadDocx(doc, { showKey, showPoints });
+            await downloadDocx(shown, { showKey, showPoints });
           }}
           className="rounded-xl bg-surface-container-low px-5 py-3 font-medium text-primary-container transition-colors hover:bg-surface-container"
         >
@@ -476,10 +489,39 @@ export function Sheet({
         </button>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-label-md text-on-surface-variant print:hidden">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={editing} onChange={(e) => setEditing(e.target.checked)} />
+        <label className={`flex items-center gap-2 ${isB ? "opacity-50" : ""}`}>
+          <input
+            type="checkbox"
+            checked={editing}
+            disabled={isB}
+            onChange={(e) => setEditing(e.target.checked)}
+          />
           Upravovat otázky
         </label>
+        {isTest && (
+          <span className="flex items-center gap-2">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={twoVariants} onChange={(e) => setTwoVariants(e.target.checked)} />
+              Dvě varianty
+            </label>
+            {twoVariants && (
+              <span className="flex rounded-lg bg-surface-container-low p-0.5">
+                {(["A", "B"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setVariant(v)}
+                    className={`rounded-md px-2.5 py-0.5 font-medium ${
+                      variant === v ? "bg-surface-container-lowest text-on-surface shadow-ambient" : ""
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </span>
+            )}
+          </span>
+        )}
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
@@ -494,6 +536,7 @@ export function Sheet({
       </div>
 
       {/* A4 Digital Sheet */}
+      <ReadOnly value={isB}>
       <article className="mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none">
         <div className="mb-8 flex flex-wrap justify-between gap-4 text-label-md text-on-surface-variant">
           <Editable value={header.meta} onChange={(v) => setDoc((d) => ({ ...d, header: { ...header, meta: v } }))} />
@@ -504,6 +547,7 @@ export function Sheet({
         </div>
         <h2 className="mb-2 font-display text-title-lg font-bold text-on-surface">
           <Editable value={doc.title} onChange={(title) => setDoc((d) => ({ ...d, title }))} />
+          {twoVariants && <span className="ml-2 text-on-surface-variant">· varianta {variant}</span>}
           {showKey && <span className="ml-2 text-primary-container">· klíč</span>}
         </h2>
         <p className="mb-10 text-body-lg text-on-surface-variant">
@@ -511,7 +555,7 @@ export function Sheet({
         </p>
 
         <div className="flex flex-col gap-12">
-          {doc.sections.map((section, si) => (
+          {shown.sections.map((section, si) => (
             <section key={si}>
               <div className="mb-1 flex items-baseline gap-3">
                 <span className="font-display text-title-md font-bold text-primary-container">{LETTERS[si]}</span>
@@ -568,6 +612,12 @@ export function Sheet({
           </p>
         )}
       </article>
+      </ReadOnly>
+      {isB && (
+        <p className="text-center text-label-md text-on-surface-variant print:hidden">
+          Varianta B má otázky i možnosti v jiném pořadí. Upravuje se varianta A, B se podle ní přepočítá.
+        </p>
+      )}
     </div>
   );
 }

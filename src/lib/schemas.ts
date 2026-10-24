@@ -184,3 +184,43 @@ export const matchingKeyLetter = (i: number, n: number) => LETTERS[(i - 1 + n) %
 
 /** Fill-in word bank: all answers in alphabetical order. */
 export const wordBank = (items: Item[]) => items.map((item) => item.answer).sort((a, b) => a.localeCompare(b, "cs"));
+
+/** Deterministic shuffle, so variant B looks the same every time it is shown or printed. */
+function shuffled<T>(items: T[], seed: number): T[] {
+  const out = [...items];
+  let state = seed;
+  const random = () => {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state / 2147483648;
+  };
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  // A shuffle can land on the original order; then rotate so B always differs.
+  if (out.length > 1 && out.every((x, i) => x === items[i])) out.push(out.shift()!);
+  return out;
+}
+
+/** Variant B of a sheet: questions and answer options in a different order, with the key to match. */
+export function variantB(sheet: Sheet): Sheet {
+  return {
+    ...sheet,
+    sections: sheet.sections.map((section, si) => ({
+      ...section,
+      items: shuffled(section.items, 7 + si).map((item, ii) => {
+        if (section.type !== "multiple_choice" || item.options.length < 2) return item;
+        const correct = LETTERS.indexOf(item.answer.trim().toUpperCase().charAt(0));
+        const order = shuffled(
+          item.options.map((_, k) => k),
+          31 + si * 61 + ii,
+        );
+        return {
+          ...item,
+          options: order.map((k) => item.options[k]),
+          answer: correct >= 0 ? LETTERS[order.indexOf(correct)] : item.answer,
+        };
+      }),
+    })),
+  };
+}
