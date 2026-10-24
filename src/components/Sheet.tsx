@@ -1,9 +1,11 @@
 "use client";
 
-import { createContext, use, useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSupabase, supabaseConfigured } from "@/lib/supabase";
 import { requestAdaptation } from "@/lib/client-api";
 import { ExportMenu } from "./ExportMenu";
+import { MathText } from "./MathText";
+import { hasMath } from "@/lib/rich";
 import { ShareButton } from "./ShareButton";
 import { useAuth } from "./AuthProvider";
 import {
@@ -31,7 +33,12 @@ const ReadOnly = createContext(false);
 
 /** A field that looks like printed text but can be edited in place. */
 function Editable(props: { value: string; onChange: (value: string) => void; className?: string }) {
-  if (use(ReadOnly)) return <span className={props.className}>{props.value}</span>;
+  if (use(ReadOnly))
+    return (
+      <span className={props.className}>
+        <MathText text={props.value} />
+      </span>
+    );
   // Remount when the value changes from outside (a replaced or removed question),
   // so the browser's edited text never lingers over the new value.
   return <EditableText key={props.value} {...props} />;
@@ -46,11 +53,34 @@ function EditableText({
   onChange: (value: string) => void;
   className?: string;
 }) {
+  // Text with formulas shows them typeset; a click switches to the source, e.g. "$\frac{3}{4}$".
+  const [source, setSource] = useState(false);
+  const field = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (source) field.current?.focus();
+  }, [source]);
+  if (hasMath(value) && !source) {
+    return (
+      <span
+        tabIndex={0}
+        onClick={() => setSource(true)}
+        onFocus={() => setSource(true)}
+        title="Kliknutím upravíte vzorec"
+        className={`cursor-text rounded-sm hover:bg-surface-container-low print:bg-transparent ${className}`}
+      >
+        <MathText text={value} />
+      </span>
+    );
+  }
   return (
     <span
+      ref={field}
       contentEditable
       suppressContentEditableWarning
-      onBlur={(e) => onChange(e.currentTarget.textContent ?? "")}
+      onBlur={(e) => {
+        setSource(false);
+        onChange(e.currentTarget.textContent ?? "");
+      }}
       className={`rounded-sm outline-none focus:bg-surface-container-low print:bg-transparent ${className}`}
     >
       {value}
@@ -208,7 +238,12 @@ function FillBlank({ section, start, showKey, onItem, onSection, tools }: ItemPr
       </label>
       {!section.hideBank && (
         <p className="rounded-xl bg-surface-container-low px-5 py-3 text-body-lg text-on-surface print:bg-transparent print:outline print:outline-1 print:outline-outline-variant">
-          {bank.join(" · ")}
+          {bank.map((word, i) => (
+            <span key={i}>
+              {i > 0 && " · "}
+              <MathText text={word} />
+            </span>
+          ))}
         </p>
       )}
       <ol className="flex flex-col gap-4">
@@ -289,7 +324,6 @@ function Written({ section, start, showKey, onItem, tools, lines }: ItemProps & 
   );
 }
 
-/** A blank question of the section's type for the teacher to fill in. */
 type Rating = 1 | -1;
 
 /** Saves a teacher's thumbs up or down on one question, for improving the prompts later. */
@@ -357,6 +391,37 @@ function AddSection({ onAdd }: { onAdd: (spec: SectionSpec) => Promise<void> }) 
   );
 }
 
+/** A problem with room for the working and a line for the result; the key shows the steps. */
+function Calculation({ section, start, showKey, onItem, tools }: ItemProps) {
+  return (
+    <ol className="flex flex-col gap-7">
+      {section.items.map((item, i) => (
+        <li key={i} className="break-inside-avoid">
+          <p className="flex gap-2 font-medium text-on-surface">
+            <span className="flex-1">
+              {start + i}. <Prompt item={item} index={i} onItem={onItem} />
+            </span>
+            {tools(i)}
+          </p>
+          {showKey ? (
+            <p className="mt-2 whitespace-pre-line pl-6 text-body-lg text-primary-container">
+              <Editable value={item.answer} onChange={(answer) => onItem(i, { answer })} />
+            </p>
+          ) : (
+            <div className="mt-3 ml-6 flex flex-col gap-3">
+              <div className="h-36 rounded-lg border border-dashed border-outline-variant" aria-label="Místo na postup" />
+              <p className="text-body-lg text-on-surface-variant">
+                Výsledek: <span className="inline-block w-48 border-b border-dotted border-on-surface-variant/60" />
+              </p>
+            </div>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** A blank question of the section's type for the teacher to fill in. */
 function blankItem(type: Section["type"]): Item {
   if (type === "multiple_choice") return { prompt: "Nová otázka", options: ["…", "…", "…", "…"], answer: "A" };
   if (type === "true_false") return { prompt: "Nové tvrzení", options: [], answer: "P" };
@@ -436,6 +501,8 @@ function SectionItems(props: ItemProps) {
       return <Written {...props} lines={2} />;
     case "open":
       return <Written {...props} lines={6} />;
+    case "calculation":
+      return <Calculation {...props} />;
   }
 }
 

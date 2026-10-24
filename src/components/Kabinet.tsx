@@ -9,6 +9,7 @@ import {
   type Template,
 } from "@/lib/schemas";
 import { requestReplacement, requestSection } from "@/lib/client-api";
+import { toPlain } from "@/lib/rich";
 import { SHEET_ROW_COLUMNS, getSupabase, type SheetRow } from "@/lib/supabase";
 import { useAuth } from "./AuthProvider";
 import { LessonWizard } from "./LessonWizard";
@@ -303,7 +304,7 @@ export function Kabinet() {
                 className="flex min-w-0 flex-1 flex-col gap-1"
               >
                 <span className="truncate font-display text-title-md font-bold text-on-surface">
-                  {row.title}
+                  {toPlain(row.title)}
                 </span>
                 <span className="truncate text-label-md text-on-surface-variant">
                   {row.svp && (

@@ -43,7 +43,14 @@ Pravidla:
 - Vycházej jen z obsahu podkladů. Nevymýšlej fakta ani slovíčka, která v nich nejsou.
 - U slovní zásoby používej výrazy přesně z podkladů a vybírej je napříč celým seznamem, ne jen ze začátku.
 - Úlohy ať ověřují porozumění, ne jen opakování vět z textu. Žádná položka se neopakuje a jedna úloha neprozrazuje odpověď na jinou.
-- Nadpis ať je krátký a věcný. Pokyny pro žáky jedna krátká věta.`;
+- Nadpis ať je krátký a věcný. Pokyny pro žáky jedna krátká věta.
+
+Zápis vzorců (platí pro všechny předměty a všechna pole včetně možností a odpovědí):
+- Matematické výrazy, rovnice, zlomky, mocniny, odmocniny, jednotky s exponenty a fyzikální vzorce piš v LaTeXu mezi dolary, např. $\\frac{3}{4}$, $x^2 - 5x + 6 = 0$, $\\sqrt{2}$, $v = \\frac{s}{t}$, $9{,}81\\,\\text{m/s}^2$.
+- Chemické vzorce a rovnice piš jako $\\ce{…}$, např. $\\ce{H2SO4}$, $\\ce{SO4^2-}$, $\\ce{2H2 + O2 -> 2H2O}$, $\\ce{N2 + 3H2 <=> 2NH3}$.
+- Obyčejná čísla a text bez vzorců piš normálně, bez dolarů. Desetinnou čárku piš česky, v LaTeXu jako {,}.
+- Znak dolaru jako měnu piš jako \\$ (např. \\$5).
+- U doplňování může být vynechané místo ____ i uvnitř věty se vzorcem, ale ne uvnitř dolarů.`;
 
 function taskPrompt(input: GenerateInput): string {
   const lines = input.sections.map((s, i) => {
