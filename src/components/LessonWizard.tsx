@@ -9,17 +9,19 @@ import {
   type QuestionType,
   type SectionSpec,
   type Sheet as SheetData,
+  type Template,
 } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
-import { getSupabase } from "@/lib/supabase";
+import { postForm, requestReplacement } from "@/lib/client-api";
+import { formatSize, shrinkImage } from "@/lib/shrink-image";
 import Link from "next/link";
 import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
 
 const STEPS = ["Škola a předmět", "Podklady", "Výstup"] as const;
 const OUTPUTS = [
-  { id: "test", label: "Test", hint: "s body a známkou" },
+  { id: "test", label: "Test", hint: "s body za každou část" },
   { id: "worksheet", label: "Pracovní list", hint: "k procvičování" },
 ] as const;
 
@@ -57,20 +59,25 @@ function Option({
   );
 }
 
-export function LessonWizard() {
-  const [step, setStep] = useState(0);
-  const [schoolId, setSchoolId] = useState<string | null>(null);
-  const [grade, setGrade] = useState<string | null>(null);
-  const [subject, setSubject] = useState("");
+/** The three-step wizard; a template from the Kabinet pre-fills everything but the materials. */
+export function LessonWizard({ template }: { template?: Template }) {
+  const [step, setStep] = useState(template?.schoolId && template.grade ? 1 : 0);
+  const [schoolId, setSchoolId] = useState<string | null>(template?.schoolId || null);
+  const [grade, setGrade] = useState<string | null>(template?.grade || null);
+  const [subject, setSubject] = useState(template?.subject ?? "");
   const [topic, setTopic] = useState("");
-  const [output, setOutput] = useState<"test" | "worksheet">("test");
-  const [presetId, setPresetId] = useState<string | null>(PRESETS[1].id);
-  const [sections, setSections] = useState<SectionSpec[]>(PRESETS[1].sections);
-  const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(null);
+  const [output, setOutput] = useState<"test" | "worksheet">(template?.output ?? "test");
+  const [presetId, setPresetId] = useState<string | null>(template ? null : PRESETS[1].id);
+  const [sections, setSections] = useState<SectionSpec[]>(template?.sections ?? PRESETS[1].sections);
+  const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(
+    template?.instructionLanguage ?? null,
+  );
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [preparing, setPreparing] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
-  const [difficulty, setDifficulty] = useState("Střední");
+  const [difficulty, setDifficulty] = useState(template?.difficulty ?? "Střední");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ sheet: SheetData; id: string | null } | null>(null);
@@ -87,7 +94,7 @@ export function LessonWizard() {
   const meta = `${subject} · ${school?.name} · ${grade}`;
   const canContinue = [
     Boolean(school && grade && subject),
-    Boolean(topic && (files.length > 0 || url) && !tooBig),
+    Boolean(topic && (files.length > 0 || url) && !tooBig && !preparing),
     sections.length > 0 && itemCount <= MAX_ITEMS,
   ][step];
 
@@ -96,12 +103,29 @@ export function LessonWizard() {
     setSections(sections.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   };
 
+  async function addFiles(list: FileList | null) {
+    if (!list?.length) return;
+    setPreparing(true);
+    setFileError(null);
+    const added: File[] = [];
+    for (const file of Array.from(list)) {
+      try {
+        added.push(await shrinkImage(file));
+      } catch (e) {
+        setFileError(e instanceof Error ? e.message : `Soubor „${file.name}“ se nepodařilo načíst.`);
+      }
+    }
+    setFiles((current) => [...current, ...added]);
+    setPreparing(false);
+  }
+
   async function submit() {
     setLoading(true);
     setError(null);
     const form = new FormData();
     form.set("output", output);
     form.set("school", school?.name ?? "");
+    form.set("schoolId", schoolId ?? "");
     form.set("grade", grade ?? "");
     form.set("subject", subject);
     form.set("topic", topic);
@@ -113,14 +137,7 @@ export function LessonWizard() {
     form.set("meta", meta);
     files.forEach((f) => form.append("files", f));
     try {
-      const headers: HeadersInit = {};
-      if (auth.enabled) {
-        const { data } = await getSupabase().auth.getSession();
-        if (data.session) headers.Authorization = `Bearer ${data.session.access_token}`;
-      }
-      const res = await fetch("/api/generate", { method: "POST", body: form, headers });
-      const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
-      if (!res.ok) throw new Error(body.error);
+      const body = await postForm<{ sheet: SheetData; id?: string; left?: number }>("/api/generate", form);
       setResult({ sheet: body.sheet as SheetData, id: body.id ?? null });
       if (typeof body.left === "number") setLeft(body.left);
     } catch (e) {
@@ -131,7 +148,15 @@ export function LessonWizard() {
   }
 
   if (result) {
-    return <Sheet result={result.sheet} id={result.id} meta={meta} onBack={() => setResult(null)} />;
+    return (
+      <Sheet
+        result={result.sheet}
+        id={result.id}
+        meta={meta}
+        onBack={() => setResult(null)}
+        onReplace={(args) => requestReplacement({ ...args, files, url })}
+      />
+    );
   }
 
   return (
@@ -246,14 +271,20 @@ export function LessonWizard() {
           <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl bg-surface-container-low px-6 py-12 text-center transition-colors hover:bg-surface-container">
             <span className="font-medium text-on-surface">Nahrajte podklady</span>
             <span className="text-label-md text-on-surface-variant">
-              Fotografie, PDF, PowerPoint (PPTX)
+              Fotografie stránek (i víc najednou), PDF, PowerPoint (PPTX)
+            </span>
+            <span className="text-label-md text-on-surface-variant">
+              Fotky z mobilu aplikace sama zmenší, aby se jich vešlo víc.
             </span>
             <input
               type="file"
               multiple
-              accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.pptx"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.pdf,.pptx"
               className="sr-only"
-              onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])}
+              onChange={(e) => {
+                addFiles(e.target.files);
+                e.target.value = "";
+              }}
             />
           </label>
 
@@ -265,10 +296,13 @@ export function LessonWizard() {
                   className="flex items-center justify-between rounded-xl bg-surface-container-low px-4 py-2 text-sm"
                 >
                   <span className="truncate text-on-surface">{f.name}</span>
+                  <span className="ml-auto shrink-0 pl-4 text-label-md text-on-surface-variant">
+                    {formatSize(f.size)}
+                  </span>
                   <button
                     type="button"
                     onClick={() => setFiles(files.filter((_, j) => j !== i))}
-                    className="ml-4 text-on-surface-variant hover:text-on-surface"
+                    className="ml-4 shrink-0 text-on-surface-variant hover:text-on-surface"
                   >
                     Odebrat
                   </button>
@@ -276,9 +310,19 @@ export function LessonWizard() {
               ))}
             </ul>
           )}
+          {preparing && <p className="text-sm text-on-surface-variant">Připravuji fotky…</p>}
+          {files.length > 0 && !tooBig && (
+            <p className="text-label-md text-on-surface-variant">
+              Celkem {formatSize(uploadBytes)} ze 4 MB
+            </p>
+          )}
+          {fileError && (
+            <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">{fileError}</p>
+          )}
           {tooBig && (
             <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">
-              Soubory jsou dohromady větší než 4 MB. Odeberte některý nebo nahrajte menší fotky.
+              Soubory mají dohromady {formatSize(uploadBytes)}, víc než 4 MB. Odeberte některý soubor, nejčastěji
+              velké PDF.
             </p>
           )}
 

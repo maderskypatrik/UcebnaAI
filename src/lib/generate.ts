@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { materialsToBlocks } from "./materials";
-import { GeneratedSchema, QUESTION_TYPES, type SectionSpec, type Sheet } from "./schemas";
+import { z } from "zod";
+import { GeneratedSchema, QUESTION_TYPES, type Item, type Section, type SectionSpec, type Sheet } from "./schemas";
 
 const MODEL = "claude-opus-5-5";
 
@@ -47,15 +48,18 @@ ${lines.join("\n")}
 Každá část má krátký nadpis (např. „English → Czech“ nebo „Doplňte správný tvar“, bez písmena a bez čísla) a jednovětý pokyn pro žáky. ${language}${input.note ? `\n\nPoznámka učitele: ${input.note}` : ""}`;
 }
 
-export async function generate(input: GenerateInput): Promise<Sheet> {
-  const materials = await materialsToBlocks(input.files, input.url);
-
+function getClient(): Anthropic {
   // An organization-level API key must name its workspace on every request.
   const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
   client ??= new Anthropic({
     defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
   });
-  const response = await client.beta.messages.parse({
+  return client;
+}
+
+export async function generate(input: GenerateInput): Promise<Sheet> {
+  const materials = await materialsToBlocks(input.files, input.url);
+  const response = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: 16000,
     betas: ["server-side-fallback-2026-07-01"],
@@ -90,4 +94,59 @@ export async function generate(input: GenerateInput): Promise<Sheet> {
       };
     }),
   };
+}
+
+const ItemSchema = z.object({ prompt: z.string(), options: z.array(z.string()), answer: z.string() });
+
+export type ReplaceInput = {
+  /** Subject, school and grade as shown in the sheet header. */
+  meta: string;
+  title: string;
+  section: Section;
+  /** Index of the item to replace within the section. */
+  index: number;
+  url: string;
+  files: File[];
+};
+
+/** One new item for a section, different from the ones already there. */
+export async function replaceItem(input: ReplaceInput): Promise<Item> {
+  const materials = await materialsToBlocks(input.files, input.url);
+  const t = QUESTION_TYPES[input.section.type];
+  const others = input.section.items
+    .map((item, i) => `${i === input.index ? "NAHRADIT → " : ""}${item.prompt} = ${item.answer}`)
+    .join("\n");
+  const source = materials.length
+    ? "Vycházej jen z přiložených podkladů."
+    : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně ostatních položek.";
+  const response = await getClient().beta.messages.parse({
+    model: MODEL,
+    max_tokens: 4000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "low", format: betaZodOutputFormat(ItemSchema) },
+    system: SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...materials,
+          {
+            type: "text",
+            text: `${input.meta}. Test: ${input.title}. Část „${input.section.title}“ (${input.section.instructions}).
+Typ položek: ${t.prompt}
+
+Současné položky této části:
+${others}
+
+Napiš jednu novou položku místo té označené „NAHRADIT“. Musí být jiná než všechny současné, stejného typu a podobně obtížná. ${source}`,
+          },
+        ],
+      },
+    ],
+  });
+  if (response.stop_reason === "refusal" || !response.parsed_output) {
+    throw new Error("Novou otázku se nepodařilo vytvořit, zkuste to znovu.");
+  }
+  return ItemSchema.parse(response.parsed_output);
 }
