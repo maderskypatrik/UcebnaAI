@@ -36,7 +36,7 @@ export async function authorize(request: Request): Promise<Authorized> {
 }
 
 /** Logs one Claude call for the cost overview. A failed log never fails the teacher's request. */
-export async function recordUsage(supabase: SupabaseClient | undefined, kind: "generate" | "replace" | "svp", usage: Usage) {
+export async function recordUsage(supabase: SupabaseClient | undefined, kind: "generate" | "replace" | "svp" | "section", usage: Usage) {
   if (!supabase) return;
   const { error } = await supabase.from("claude_calls").insert({
     kind,

@@ -1,4 +1,4 @@
-import type { Item, Section, Sheet } from "./schemas";
+import type { Item, Section, SectionSpec, Sheet } from "./schemas";
 import { getSupabase, supabaseConfigured } from "./supabase";
 
 /** The signed-in teacher's token for our API routes, when login is switched on. */
@@ -14,6 +14,33 @@ export async function postForm<T>(path: string, form: FormData): Promise<T> {
   const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
   if (!res.ok) throw new Error(body.error);
   return body as T;
+}
+
+type Generated = { sheet: Sheet; id?: string | null; left?: number | null };
+
+/** Creates a test, reporting how many questions Claude has written so far. */
+export async function requestGeneration(form: FormData, onProgress: (done: number) => void): Promise<Generated> {
+  const res = await fetch("/api/generate", { method: "POST", body: form, headers: await authHeaders() });
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
+    throw new Error(body.error);
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines.filter(Boolean)) {
+      const event = JSON.parse(line);
+      if (event.type === "progress") onProgress(event.done);
+      if (event.type === "error") throw new Error(event.error);
+      if (event.type === "done") return event as Generated;
+    }
+  }
+  throw new Error("Spojení se přerušilo, zkuste to prosím znovu.");
 }
 
 /** The test rewritten for students with special educational needs; saved to the Kabinet when login is on. */
@@ -46,4 +73,22 @@ export async function requestReplacement(args: {
   args.files?.forEach((f) => form.append("files", f));
   const { item } = await postForm<{ item: Item }>("/api/replace", form);
   return item;
+}
+
+/** One more part for a finished test; materials are sent along while the teacher still has them. */
+export async function requestSection(args: {
+  sheet: Sheet;
+  spec: SectionSpec;
+  meta: string;
+  files?: File[];
+  url?: string;
+}): Promise<Section> {
+  const form = new FormData();
+  form.set("sheet", JSON.stringify(args.sheet));
+  form.set("spec", JSON.stringify(args.spec));
+  form.set("meta", args.meta);
+  form.set("url", args.url ?? "");
+  args.files?.forEach((f) => form.append("files", f));
+  const { section } = await postForm<{ section: Section }>("/api/section", form);
+  return section;
 }
