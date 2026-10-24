@@ -96,8 +96,35 @@ export type Section = {
   hideBank?: boolean;
 };
 
+export type SheetSettings = {
+  schoolId: string;
+  grade: string;
+  subject: string;
+  difficulty: string;
+  instructionLanguage: "czech" | "subject";
+};
+
+/** What "Podobný test" carries into the wizard: the same settings and parts, new materials. */
+export type Template = SheetSettings & { output: "test" | "worksheet"; sections: SectionSpec[] };
+
+export const templateFrom = (sheet: Sheet): Template => ({
+  // Sheets saved before settings were kept start the wizard from the first step.
+  schoolId: "",
+  grade: "",
+  subject: "",
+  difficulty: "Střední",
+  instructionLanguage: "czech",
+  ...sheet.settings,
+  output: sheet.kind,
+  sections: sheet.sections
+    .filter((s) => s.items.length > 0)
+    .map((s) => ({ type: s.type, count: Math.min(s.items.length, 30), points: s.points })),
+});
+
 export type Sheet = {
   kind: "test" | "worksheet";
+  /** The wizard's choices, kept so the teacher can start a similar test from the Kabinet. */
+  settings?: SheetSettings;
   /** Header lines above the title; filled in by the app, editable by the teacher. */
   header?: { meta: string; student: string };
   title: string;

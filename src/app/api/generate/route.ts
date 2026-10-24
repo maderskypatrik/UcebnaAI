@@ -57,6 +57,13 @@ export async function POST(request: Request) {
       url,
       files,
     });
+    sheet.settings = {
+      schoolId: text("schoolId"),
+      grade: text("grade"),
+      subject: text("subject"),
+      difficulty: text("difficulty") || "Střední",
+      instructionLanguage: text("instructionLanguage") === "subject" ? "subject" : "czech",
+    };
     if (!supabase) return Response.json({ sheet });
 
     const { data: left } = await supabase.rpc("consume_generation");

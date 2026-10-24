@@ -9,6 +9,7 @@ import {
   type QuestionType,
   type SectionSpec,
   type Sheet as SheetData,
+  type Template,
 } from "@/lib/schemas";
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
@@ -20,7 +21,7 @@ import { Sheet } from "./Sheet";
 
 const STEPS = ["Škola a předmět", "Podklady", "Výstup"] as const;
 const OUTPUTS = [
-  { id: "test", label: "Test", hint: "s body a známkou" },
+  { id: "test", label: "Test", hint: "s body za každou část" },
   { id: "worksheet", label: "Pracovní list", hint: "k procvičování" },
 ] as const;
 
@@ -58,22 +59,25 @@ function Option({
   );
 }
 
-export function LessonWizard() {
-  const [step, setStep] = useState(0);
-  const [schoolId, setSchoolId] = useState<string | null>(null);
-  const [grade, setGrade] = useState<string | null>(null);
-  const [subject, setSubject] = useState("");
+/** The three-step wizard; a template from the Kabinet pre-fills everything but the materials. */
+export function LessonWizard({ template }: { template?: Template }) {
+  const [step, setStep] = useState(template?.schoolId && template.grade ? 1 : 0);
+  const [schoolId, setSchoolId] = useState<string | null>(template?.schoolId || null);
+  const [grade, setGrade] = useState<string | null>(template?.grade || null);
+  const [subject, setSubject] = useState(template?.subject ?? "");
   const [topic, setTopic] = useState("");
-  const [output, setOutput] = useState<"test" | "worksheet">("test");
-  const [presetId, setPresetId] = useState<string | null>(PRESETS[1].id);
-  const [sections, setSections] = useState<SectionSpec[]>(PRESETS[1].sections);
-  const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(null);
+  const [output, setOutput] = useState<"test" | "worksheet">(template?.output ?? "test");
+  const [presetId, setPresetId] = useState<string | null>(template ? null : PRESETS[1].id);
+  const [sections, setSections] = useState<SectionSpec[]>(template?.sections ?? PRESETS[1].sections);
+  const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(
+    template?.instructionLanguage ?? null,
+  );
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [preparing, setPreparing] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
-  const [difficulty, setDifficulty] = useState("Střední");
+  const [difficulty, setDifficulty] = useState(template?.difficulty ?? "Střední");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ sheet: SheetData; id: string | null } | null>(null);
@@ -121,6 +125,7 @@ export function LessonWizard() {
     const form = new FormData();
     form.set("output", output);
     form.set("school", school?.name ?? "");
+    form.set("schoolId", schoolId ?? "");
     form.set("grade", grade ?? "");
     form.set("subject", subject);
     form.set("topic", topic);
