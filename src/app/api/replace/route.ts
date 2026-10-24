@@ -1,5 +1,5 @@
 import { authorize, errorResponse, recordUsage } from "@/lib/api";
-import { replaceItem } from "@/lib/generate";
+import { cleanImage, replaceItem } from "@/lib/generate";
 import { QUESTION_TYPE_IDS, type Section } from "@/lib/schemas";
 
 export const maxDuration = 120;
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const { item, usage } = await replaceItem({
       meta: text("meta").slice(0, 300),
       title: text("title").slice(0, 300),
-      section: { ...section, items: section.items.slice(0, 60) },
+      section: { ...section, items: section.items.slice(0, 60), image: cleanImage(section.image) },
       index,
       url: text("url"),
       files: form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0),

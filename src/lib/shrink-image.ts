@@ -43,3 +43,21 @@ export const formatSize = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${Math.max(1, Math.round(bytes / 1024))} kB`
     : `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
+
+/** Longest edge of a picture printed on the sheet: sharp on A4, small enough to keep in the Kabinet. */
+const PICTURE_EDGE = 1200;
+
+/** A picture for a picture part as a JPEG data URL, scaled down so it can travel inside the sheet. */
+export async function pictureDataUrl(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const scale = Math.min(1, PICTURE_EDGE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.82);
+}

@@ -69,6 +69,18 @@ function giftSection(section: Section, start: number): string[] {
           .map((item) => `  =${gift(item.prompt)} -> ${gift(item.answer)}`)
           .join("\n")}\n}`,
       ];
+    case "ordering":
+      // An ordering is a matching of entries to their positions; Moodle needs three of them.
+      return section.items.flatMap((item, i) =>
+        item.options.length < 3
+          ? []
+          : [`${name(i)}${gift(item.prompt)} {\n${item.options.map((o, k) => `  =${gift(o)} -> ${k + 1}.`).join("\n")}\n}`],
+      );
+    case "picture":
+    case "word_search":
+      // Moodle's text format can't carry the picture or the letter grid.
+      return [];
+    case "crossword":
     case "translate_to_czech":
     case "translate_from_czech":
       return section.items.map(
@@ -92,15 +104,24 @@ export function toMoodle(original: Sheet): Exported {
   let start = 1;
   const questions: string[] = [];
   for (const section of sheet.sections) {
-    questions.push(`$CATEGORY: $course$/${gift(sheet.title)}/${gift(section.title)}`, "");
-    questions.push(...giftSection(section, start).flatMap((q) => [q, ""]));
+    const made = giftSection(section, start);
+    if (made.length) questions.push(`$CATEGORY: $course$/${gift(sheet.title)}/${gift(section.title)}`, "", ...made.flatMap((q) => [q, ""]));
     start += section.items.length;
   }
-  const count = sheet.sections.reduce(
-    (n, s) => n + (s.type === "matching" ? (s.items.length >= 3 ? 1 : 0) : s.items.length),
-    0,
-  );
-  const skipped = sheet.sections.filter((s) => s.type === "matching" && s.items.length < 3).length;
+  let count = 0;
+  let skipped = 0;
+  for (const s of sheet.sections) {
+    const made =
+      s.type === "matching"
+        ? s.items.length >= 3 ? 1 : 0
+        : s.type === "ordering"
+          ? s.items.filter((item) => item.options.length >= 3).length
+          : s.type === "picture" || s.type === "word_search"
+            ? 0
+            : s.items.length;
+    count += made;
+    skipped += s.type === "matching" ? (made ? 0 : 1) : s.items.length - made;
+  }
   return { blob: textBlob(questions.join("\n")), fileName: `${baseName(sheet)} – Moodle.gift.txt`, count, skipped };
 }
 
@@ -116,7 +137,12 @@ export function toQuizlet(original: Sheet): Exported {
       const clean = (t: string) => t.replace(/[\t\n]+/g, " ").trim();
       if (section.type === "multiple_choice") lines.push(`${clean(item.prompt)}\t${clean(item.options[correctIndex(item)] ?? "")}`);
       else if (section.type === "true_false") lines.push(`${clean(item.prompt)}\t${isTrue(item) ? "Pravda" : "Nepravda"}`);
-      else if (section.type === "open") skipped++;
+      else if (section.type === "open" || section.type === "picture") skipped++;
+      else if (section.type === "ordering") lines.push(`${clean(item.prompt)}\t${item.options.map(clean).join(" → ")}`);
+      else if (section.type === "word_search") {
+        if (item.answer.trim()) lines.push(`${clean(item.answer)}\t${clean(item.prompt)}`);
+        else skipped++;
+      }
       else if (section.type === "calculation") lines.push(`${clean(item.prompt)}\t${clean(item.answer.split("\n").at(-1) ?? "")}`);
       else lines.push(`${clean(item.prompt)}\t${clean(item.answer)}`);
     }
@@ -233,7 +259,13 @@ export function toGoogleForms(original: Sheet): Exported {
     "  var item;",
   ];
   let count = 0;
+  let skipped = 0;
   for (const section of sheet.sections) {
+    if (section.type === "picture" || section.type === "word_search") {
+      // A picture or a letter grid needs the printed sheet.
+      skipped += section.items.length;
+      continue;
+    }
     lines.push(`  form.addSectionHeaderItem().setTitle(${js(section.title)}).setHelpText(${js(section.instructions)});`);
     const points = Math.max(1, Math.round(section.points));
     if (section.type === "matching") {
@@ -247,6 +279,13 @@ export function toGoogleForms(original: Sheet): Exported {
     }
     for (const item of section.items) {
       count++;
+      if (section.type === "ordering") {
+        lines.push(
+          "  item = form.addGridItem();",
+          `  item.setTitle(${js(item.prompt)}).setRows(${JSON.stringify(item.options)}).setColumns(${JSON.stringify(item.options.map((_, k) => `${k + 1}.`))});`,
+        );
+        continue;
+      }
       if (section.type === "multiple_choice" || section.type === "true_false") {
         const options =
           section.type === "true_false"
@@ -274,5 +313,5 @@ export function toGoogleForms(original: Sheet): Exported {
     "}",
     "",
   );
-  return { blob: textBlob(lines.join("\n")), fileName: `${baseName(sheet)} – Google Formuláře.gs.txt`, count, skipped: 0 };
+  return { blob: textBlob(lines.join("\n")), fileName: `${baseName(sheet)} – Google Formuláře.gs.txt`, count, skipped };
 }

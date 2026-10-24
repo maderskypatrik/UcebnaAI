@@ -1,4 +1,4 @@
-import type { Item, Section, SectionSpec, Sheet } from "./schemas";
+import { withoutImage, type Item, type Section, type SectionSpec, type Sheet } from "./schemas";
 import { getSupabase, supabaseConfigured } from "./supabase";
 
 /** The signed-in teacher's token for our API routes, when login is switched on. */
@@ -84,7 +84,8 @@ export async function requestSection(args: {
   url?: string;
 }): Promise<Section> {
   const form = new FormData();
-  form.set("sheet", JSON.stringify(args.sheet));
+  // The other parts' pictures are not needed for writing a new part.
+  form.set("sheet", JSON.stringify({ ...args.sheet, sections: args.sheet.sections.map(withoutImage) }));
   form.set("spec", JSON.stringify(args.spec));
   form.set("meta", args.meta);
   form.set("url", args.url ?? "");
