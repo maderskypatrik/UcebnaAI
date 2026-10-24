@@ -13,6 +13,7 @@ import {
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
 import { postForm, requestReplacement } from "@/lib/client-api";
+import { formatSize, shrinkImage } from "@/lib/shrink-image";
 import Link from "next/link";
 import { useAuth } from "./AuthProvider";
 import { Sheet } from "./Sheet";
@@ -69,6 +70,8 @@ export function LessonWizard() {
   const [instructionLanguage, setInstructionLanguage] = useState<"czech" | "subject" | null>(null);
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [preparing, setPreparing] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
   const [difficulty, setDifficulty] = useState("Střední");
   const [loading, setLoading] = useState(false);
@@ -87,7 +90,7 @@ export function LessonWizard() {
   const meta = `${subject} · ${school?.name} · ${grade}`;
   const canContinue = [
     Boolean(school && grade && subject),
-    Boolean(topic && (files.length > 0 || url) && !tooBig),
+    Boolean(topic && (files.length > 0 || url) && !tooBig && !preparing),
     sections.length > 0 && itemCount <= MAX_ITEMS,
   ][step];
 
@@ -95,6 +98,22 @@ export function LessonWizard() {
     setPresetId(null);
     setSections(sections.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   };
+
+  async function addFiles(list: FileList | null) {
+    if (!list?.length) return;
+    setPreparing(true);
+    setFileError(null);
+    const added: File[] = [];
+    for (const file of Array.from(list)) {
+      try {
+        added.push(await shrinkImage(file));
+      } catch (e) {
+        setFileError(e instanceof Error ? e.message : `Soubor „${file.name}“ se nepodařilo načíst.`);
+      }
+    }
+    setFiles((current) => [...current, ...added]);
+    setPreparing(false);
+  }
 
   async function submit() {
     setLoading(true);
@@ -247,14 +266,20 @@ export function LessonWizard() {
           <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl bg-surface-container-low px-6 py-12 text-center transition-colors hover:bg-surface-container">
             <span className="font-medium text-on-surface">Nahrajte podklady</span>
             <span className="text-label-md text-on-surface-variant">
-              Fotografie, PDF, PowerPoint (PPTX)
+              Fotografie stránek (i víc najednou), PDF, PowerPoint (PPTX)
+            </span>
+            <span className="text-label-md text-on-surface-variant">
+              Fotky z mobilu aplikace sama zmenší, aby se jich vešlo víc.
             </span>
             <input
               type="file"
               multiple
-              accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.pptx"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,.heic,.pdf,.pptx"
               className="sr-only"
-              onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])}
+              onChange={(e) => {
+                addFiles(e.target.files);
+                e.target.value = "";
+              }}
             />
           </label>
 
@@ -266,10 +291,13 @@ export function LessonWizard() {
                   className="flex items-center justify-between rounded-xl bg-surface-container-low px-4 py-2 text-sm"
                 >
                   <span className="truncate text-on-surface">{f.name}</span>
+                  <span className="ml-auto shrink-0 pl-4 text-label-md text-on-surface-variant">
+                    {formatSize(f.size)}
+                  </span>
                   <button
                     type="button"
                     onClick={() => setFiles(files.filter((_, j) => j !== i))}
-                    className="ml-4 text-on-surface-variant hover:text-on-surface"
+                    className="ml-4 shrink-0 text-on-surface-variant hover:text-on-surface"
                   >
                     Odebrat
                   </button>
@@ -277,9 +305,19 @@ export function LessonWizard() {
               ))}
             </ul>
           )}
+          {preparing && <p className="text-sm text-on-surface-variant">Připravuji fotky…</p>}
+          {files.length > 0 && !tooBig && (
+            <p className="text-label-md text-on-surface-variant">
+              Celkem {formatSize(uploadBytes)} ze 4 MB
+            </p>
+          )}
+          {fileError && (
+            <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">{fileError}</p>
+          )}
           {tooBig && (
             <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">
-              Soubory jsou dohromady větší než 4 MB. Odeberte některý nebo nahrajte menší fotky.
+              Soubory mají dohromady {formatSize(uploadBytes)}, víc než 4 MB. Odeberte některý soubor, nejčastěji
+              velké PDF.
             </p>
           )}
 
