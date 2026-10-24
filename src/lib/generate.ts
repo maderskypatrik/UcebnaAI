@@ -2,7 +2,38 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { materialsToBlocks } from "./materials";
 import { z } from "zod";
-import { GeneratedSchema, QUESTION_TYPES, type Item, type Section, type SectionSpec, type Sheet } from "./schemas";
+import {
+  GeneratedSchema,
+  QUESTION_TYPES,
+  THINKING_LEVELS,
+  type Item,
+  type QuestionType,
+  type Section,
+  type SectionSpec,
+  type Sheet,
+} from "./schemas";
+
+type Block = Anthropic.Beta.BetaContentBlockParam;
+
+const IMAGE_DATA_URL = /^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/;
+/** A picture for a picture part is shrunk in the browser; anything much bigger is not one of ours. */
+const MAX_IMAGE_CHARS = 1_500_000;
+
+/** The picture of a picture part when it is a small image data URL, otherwise nothing. */
+export function cleanImage(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= MAX_IMAGE_CHARS && IMAGE_DATA_URL.test(value) ? value : undefined;
+}
+
+function imageBlock(dataUrl: string): Block[] {
+  const match = dataUrl.match(IMAGE_DATA_URL);
+  if (!match) return [];
+  const media_type = match[1] as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  return [{ type: "image", source: { type: "base64", media_type, data: match[2] } }];
+}
+
+/** Each picture part's picture, labelled so Claude knows which part it belongs to. */
+const pictureBlocks = (sections: { image?: string }[], label = (i: number) => `Obrázek k ${i + 1}. části:`): Block[] =>
+  sections.flatMap((s, i) => (s.image ? [{ type: "text" as const, text: label(i) }, ...imageBlock(s.image)] : []));
 
 const MODEL = "claude-opus-5-5";
 
@@ -30,6 +61,12 @@ export type GenerateInput = {
   topic: string;
   difficulty: string;
   instructionLanguage: "czech" | "subject";
+  /** One of THINKING_LEVELS. */
+  thinking: string;
+  /** The curriculum outcome the test checks, if the teacher named one. */
+  outcome: string;
+  /** Pupils of the first five years: plainer language and large print. */
+  young: boolean;
   note: string;
   sections: SectionSpec[];
   url: string;
@@ -52,6 +89,9 @@ Zápis vzorců (platí pro všechny předměty a všechna pole včetně možnost
 - Znak dolaru jako měnu piš jako \\$ (např. \\$5).
 - U doplňování může být vynechané místo ____ i uvnitř věty se vzorcem, ale ne uvnitř dolarů.`;
 
+const YOUNG_RULES =
+  "Žáci jsou malé děti z 1. stupně: velmi krátké a jednoduché věty, běžná slova, žádné pojmy navíc. U výběru z možností a u přiřazování můžeš místo slov nebo vedle nich použít emoji obrázky (např. 🍎, 🐟, ☀️), když to dětem pomůže.";
+
 function taskPrompt(input: GenerateInput): string {
   const lines = input.sections.map((s, i) => {
     const t = QUESTION_TYPES[s.type];
@@ -61,12 +101,21 @@ function taskPrompt(input: GenerateInput): string {
     input.instructionLanguage === "subject"
       ? "Nadpisy částí a pokyny piš v jazyce předmětu (např. v angličtině u angličtiny), jako to bývá v učebnicích."
       : "Nadpisy částí a pokyny piš česky.";
+  const thinking = THINKING_LEVELS.find((t) => t.id === input.thinking) ?? THINKING_LEVELS[0];
+  const extra = [
+    `Úroveň myšlení: ${thinking.prompt}`,
+    input.outcome && `Test ověřuje tento očekávaný výstup z RVP: „${input.outcome}“. Každá úloha ať k němu přispívá.`,
+    input.young && YOUNG_RULES,
+    input.note && `Poznámka učitele: ${input.note}`,
+  ].filter(Boolean);
   return `Škola: ${input.school}, ${input.grade}. Předmět: ${input.subject}. Téma: ${input.topic}. Obtížnost: ${input.difficulty}.
 
 Vytvoř ${input.output === "test" ? "test" : "pracovní list"} rozdělený přesně do těchto částí, ve stejném pořadí:
 ${lines.join("\n")}
 
-Každá část má krátký nadpis (např. „English → Czech“ nebo „Doplňte správný tvar“, bez písmena a bez čísla) a jednovětý pokyn pro žáky. ${language}${input.note ? `\n\nPoznámka učitele: ${input.note}` : ""}`;
+Každá část má krátký nadpis (např. „English → Czech“ nebo „Doplňte správný tvar“, bez písmena a bez čísla) a jednovětý pokyn pro žáky. ${language}
+
+${extra.join("\n\n")}`;
 }
 
 function getClient(): Anthropic {
@@ -90,7 +139,12 @@ export async function generate(input: GenerateInput, onProgress?: OnProgress): P
     fallbacks: "default",
     output_config: { effort: "medium", format: betaZodOutputFormat(GeneratedSchema) },
     system: SYSTEM,
-    messages: [{ role: "user", content: [...materials, { type: "text", text: taskPrompt(input) }] }],
+    messages: [
+      {
+        role: "user",
+        content: [...materials, ...pictureBlocks(input.sections), { type: "text", text: taskPrompt(input) }],
+      },
+    ],
   });
   // Each finished question in the JSON so far has its "prompt" key; enough to show the teacher progress.
   let done = 0;
@@ -112,6 +166,7 @@ export async function generate(input: GenerateInput, onProgress?: OnProgress): P
   // mislabels or adds can't change how the sheet is scored.
   const sheet: Sheet = {
     kind: input.output,
+    large: input.young || undefined,
     title: generated.title,
     instructions: generated.instructions,
     sections: input.sections.map((spec, i) => {
@@ -122,6 +177,7 @@ export async function generate(input: GenerateInput, onProgress?: OnProgress): P
         title: section?.title ?? QUESTION_TYPES[spec.type].label,
         instructions: section?.instructions ?? "",
         items: section?.items ?? [],
+        ...(spec.image && { image: spec.image }),
       };
     }),
   };
@@ -148,9 +204,13 @@ export async function replaceItem(input: ReplaceInput): Promise<{ item: Item; us
   const others = input.section.items
     .map((item, i) => `${i === input.index ? "NAHRADIT → " : ""}${item.prompt} = ${item.answer}`)
     .join("\n");
-  const source = materials.length
-    ? "Vycházej jen z přiložených podkladů."
-    : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně ostatních položek.";
+  const source = input.section.image
+    ? "Vycházej z přiloženého obrázku."
+    : materials.length
+      ? "Vycházej jen z přiložených podkladů."
+      : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně ostatních položek.";
+  const secret = input.section.type === "crossword" ? input.section.items[input.index].options[0] : "";
+  const keep = secret ? ` Nové slovo musí obsahovat písmeno tajenky „${secret}“ a options = ["${secret}"].` : "";
   const response = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: 4000,
@@ -163,6 +223,7 @@ export async function replaceItem(input: ReplaceInput): Promise<{ item: Item; us
         role: "user",
         content: [
           ...materials,
+          ...pictureBlocks([input.section], () => "Obrázek k této části:"),
           {
             type: "text",
             text: `${input.meta}. Test: ${input.title}. Část „${input.section.title}“ (${input.section.instructions}).
@@ -171,7 +232,7 @@ Typ položek: ${t.prompt}
 Současné položky této části:
 ${others}
 
-Napiš jednu novou položku místo té označené „NAHRADIT“. Musí být jiná než všechny současné, stejného typu a podobně obtížná. ${source}`,
+Napiš jednu novou položku místo té označené „NAHRADIT“. Musí být jiná než všechny současné, stejného typu a podobně obtížná.${keep} ${source}`,
           },
         ],
       },
@@ -197,12 +258,15 @@ export type SectionInput = {
 export async function addSection(input: SectionInput): Promise<{ section: Section; usage: Usage }> {
   const materials = await materialsToBlocks(input.files, input.url);
   const t = QUESTION_TYPES[input.spec.type];
+  const picture = input.spec.image ? pictureBlocks([input.spec], () => "Obrázek k nové části:") : [];
   const existing = input.sheet.sections
     .map((s) => `„${s.title}“: ${s.items.map((item) => item.prompt).join(" | ")}`)
     .join("\n");
-  const source = materials.length
-    ? "Vycházej jen z přiložených podkladů."
-    : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně stávajících částí.";
+  const source = picture.length
+    ? "Úlohy piš k přiloženému obrázku."
+    : materials.length
+      ? "Vycházej jen z přiložených podkladů."
+      : "Podklady už nejsou k dispozici, drž se proto tématu a úrovně stávajících částí.";
   const response = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: 8000,
@@ -215,6 +279,7 @@ export async function addSection(input: SectionInput): Promise<{ section: Sectio
         role: "user",
         content: [
           ...materials,
+          ...picture,
           {
             type: "text",
             text: `${input.meta}. ${input.sheet.kind === "test" ? "Test" : "Pracovní list"}: ${input.sheet.title}.
@@ -234,7 +299,12 @@ Otázky se nesmí opakovat se stávajícími. Část má krátký nadpis bez pí
   }
   const section = SectionSchema.parse(response.parsed_output);
   return {
-    section: { ...section, type: input.spec.type, points: input.spec.points },
+    section: {
+      ...section,
+      type: input.spec.type,
+      points: input.spec.points,
+      ...(input.spec.image && { image: input.spec.image }),
+    },
     usage: usageOf(response),
   };
 }
@@ -249,7 +319,23 @@ Pravidla úpravy:
 - U otevřených otázek dej oporu: začátek odpovědi, nápovědné otázky nebo slova, která mají v odpovědi být.
 - U slovíček (překlady, přiřazování, doplňování) ponech stejná slovíčka a odpovědi, uprav jen pokyny.
 - Zachovej stejný počet částí a stejný počet položek v každé části, ve stejném pořadí.
+- U seřazování, úloh k obrázku, osmisměrky a křížovky ponech položky (options) a odpovědi beze změny, uprav jen zadání a nápovědy.
 - Nadpis testu ponech, na listu se o SVP nepíše.`;
+
+/** What of an item the SVP version must keep: puzzle words, picture marks and the right order. */
+function keepForSvp(type: QuestionType, original: Item, adapted: Item): Item {
+  switch (type) {
+    case "word_search":
+      return original;
+    case "crossword":
+      return { ...adapted, answer: original.answer, options: original.options };
+    case "picture":
+    case "ordering":
+      return { ...adapted, options: original.options };
+    default:
+      return adapted;
+  }
+}
 
 /** The same test rewritten for students with special educational needs. */
 export async function adaptSheet(sheet: Sheet, meta: string): Promise<{ sheet: Sheet; usage: Usage }> {
@@ -293,9 +379,9 @@ export async function adaptSheet(sheet: Sheet, meta: string): Promise<{ sheet: S
       instructions: adapted.instructions,
       sections: sheet.sections.map((s, i) => {
         const a = adapted.sections[i];
-        return a?.items.length
-          ? { ...s, title: a.title, instructions: a.instructions, items: a.items, hideBank: false }
-          : s;
+        if (!a?.items.length) return s;
+        const items = a.items.map((item, k) => (s.items[k] ? keepForSvp(s.type, s.items[k], item) : item));
+        return { ...s, title: a.title, instructions: a.instructions, items, hideBank: false };
       }),
     },
     usage: usageOf(response),

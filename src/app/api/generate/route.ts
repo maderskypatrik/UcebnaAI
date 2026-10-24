@@ -1,5 +1,6 @@
-import { generate } from "@/lib/generate";
-import { MAX_ITEMS, QUESTION_TYPE_IDS, type SectionSpec } from "@/lib/schemas";
+import { cleanImage, generate } from "@/lib/generate";
+import { MAX_ITEMS, QUESTION_TYPE_IDS, THINKING_LEVELS, type SectionSpec } from "@/lib/schemas";
+import { isYoung } from "@/lib/schools";
 import { authorize, errorResponse, recordUsage } from "@/lib/api";
 
 // Generating from a long PDF can take a minute or two.
@@ -19,6 +20,7 @@ function parseSections(raw: string): SectionSpec[] {
       type: s.type,
       count: Math.min(Math.max(Math.round(Number(s.count)) || 1, 1), 30),
       points: Math.min(Math.max(Number(s.points) || 1, 0.5), 20),
+      ...(s.type === "picture" && { image: cleanImage(s.image) }),
     }))
     .slice(0, 8);
 }
@@ -39,6 +41,9 @@ export async function POST(request: Request) {
   if (sections.length === 0) {
     return Response.json({ error: "Přidejte aspoň jednu část testu." }, { status: 400 });
   }
+  if (sections.some((s) => s.type === "picture" && !s.image)) {
+    return Response.json({ error: "K části s úlohami k obrázku vyberte obrázek." }, { status: 400 });
+  }
   if (sections.reduce((sum, s) => sum + s.count, 0) > MAX_ITEMS) {
     return Response.json({ error: `Test může mít nejvýš ${MAX_ITEMS} položek.` }, { status: 400 });
   }
@@ -51,6 +56,9 @@ export async function POST(request: Request) {
     topic: text("topic"),
     difficulty: text("difficulty") || "Střední",
     instructionLanguage: text("instructionLanguage") === "subject" ? ("subject" as const) : ("czech" as const),
+    thinking: THINKING_LEVELS.some((t) => t.id === text("thinking")) ? text("thinking") : "mix",
+    outcome: text("outcome").slice(0, 300),
+    young: isYoung(text("schoolId"), text("grade")),
     note: text("note").slice(0, 500),
     sections,
     url,
@@ -63,6 +71,8 @@ export async function POST(request: Request) {
     subject: input.subject,
     difficulty: input.difficulty,
     instructionLanguage: input.instructionLanguage,
+    thinking: input.thinking,
+    outcome: input.outcome || undefined,
   };
 
   // One JSON object per line: progress while Claude writes, then the result or an error.

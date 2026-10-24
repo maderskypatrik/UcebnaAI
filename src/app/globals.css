@@ -82,6 +82,20 @@
   letter-spacing: 0.01em;
 }
 
+/* For the youngest pupils: clearly bigger than the SVP print. */
+.large-sheet {
+  --text-sm: 1.125rem;
+  --text-sm--line-height: 1.7;
+  --text-label-md: 0.9375rem;
+  --text-body-lg: 1.375rem;
+  --text-body-lg--line-height: 1.8;
+  --text-title-md: 1.375rem;
+  --text-title-lg: 1.875rem;
+  font-size: 1.375rem;
+  line-height: 1.8;
+  letter-spacing: 0.015em;
+}
+
 body {
   background: var(--color-surface);
   color: var(--color-on-surface);

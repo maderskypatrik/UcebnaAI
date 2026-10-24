@@ -35,3 +35,6 @@ export const SUBJECTS = [
   "Informatika",
   "Občanská výchova / ZSV",
 ];
+
+/** The first five years of primary school (1. stupeň), where pupils get plainer language and large print. */
+export const isYoung = (schoolId: string, grade: string) => schoolId === "zs" && /^[1-5]\./.test(grade);
