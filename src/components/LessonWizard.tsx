@@ -112,6 +112,7 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
   const [preparing, setPreparing] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
+  const [fromTopic, setFromTopic] = useState(false);
   const [difficulty, setDifficulty] = useState(template?.difficulty ?? "Střední");
   const [thinking, setThinking] = useState(template?.thinking ?? "mix");
   const [outcome, setOutcome] = useState(template?.outcome ?? "");
@@ -134,7 +135,7 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
   const meta = `${subject} · ${school?.name} · ${grade}`;
   const canContinue = [
     Boolean(school && grade && subject),
-    Boolean(topic && (files.length > 0 || url) && !tooBig && !preparing),
+    Boolean(topic && (files.length > 0 || url || fromTopic) && !tooBig && !preparing),
     sections.length > 0 && itemCount <= MAX_ITEMS && !tooBig && sections.every((x) => x.type !== "picture" || x.image),
   ][step];
   const images = files.filter((f) => f.type.startsWith("image/"));
@@ -180,6 +181,7 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
     form.set("subject", subject);
     form.set("topic", topic);
     form.set("url", url);
+    form.set("fromTopic", fromTopic ? "1" : "");
     form.set("difficulty", difficulty);
     form.set("sections", JSON.stringify(sections));
     form.set("thinking", thinking);
@@ -415,6 +417,23 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
               placeholder="https://"
             />
           </label>
+
+          {files.length === 0 && !url && (
+            <label className="flex items-start gap-3 rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={fromTopic}
+                onChange={(e) => setFromTopic(e.target.checked)}
+              />
+              <span>
+                Nemám podklady, ať AI vychází z běžného učiva pro tento ročník.
+                <span className="block text-label-md text-on-surface-variant">
+                  Hodí se na opakování. Test pak raději projděte, AI nezná vaši učebnici.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
       )}
 

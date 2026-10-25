@@ -77,7 +77,7 @@ const SYSTEM = `Jsi zkušený český učitel a autor výukových materiálů. Z
 
 Pravidla:
 - Piš spisovně, přiměřeně věku a typu školy žáků.
-- Vycházej jen z obsahu podkladů. Nevymýšlej fakta ani slovíčka, která v nich nejsou.
+- Když jsou přiložené podklady, vycházej jen z jejich obsahu. Nevymýšlej fakta ani slovíčka, která v nich nejsou.
 - U slovní zásoby používej výrazy přesně z podkladů a vybírej je napříč celým seznamem, ne jen ze začátku.
 - Úlohy ať ověřují porozumění, ne jen opakování vět z textu. Žádná položka se neopakuje a jedna úloha neprozrazuje odpověď na jinou.
 - Nadpis ať je krátký a věcný. Pokyny pro žáky jedna krátká věta.
@@ -106,6 +106,9 @@ function taskPrompt(input: GenerateInput): string {
     `Úroveň myšlení: ${thinking.prompt}`,
     input.outcome && `Test ověřuje tento očekávaný výstup z RVP: „${input.outcome}“. Každá úloha ať k němu přispívá.`,
     input.young && YOUNG_RULES,
+    !input.files.length &&
+      !input.url &&
+      "Podklady nejsou přiložené. Vycházej z běžného učiva tohoto předmětu a ročníku podle RVP a českých učebnic. Používej jen ověřená, obecně známá fakta a nic, co by se dalo zpochybnit. Když si u otázky nejsi jistý, napiš jinou.",
     input.note && `Poznámka učitele: ${input.note}`,
   ].filter(Boolean);
   return `Škola: ${input.school}, ${input.grade}. Předmět: ${input.subject}. Téma: ${input.topic}. Obtížnost: ${input.difficulty}.

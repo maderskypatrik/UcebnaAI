@@ -81,6 +81,7 @@ function giftSection(section: Section, start: number): string[] {
       // Moodle's text format can't carry the picture or the letter grid.
       return [];
     case "crossword":
+    case "letters":
     case "translate_to_czech":
     case "translate_from_czech":
       return section.items.map(
@@ -91,6 +92,7 @@ function giftSection(section: Section, start: number): string[] {
             .join(" ")}}`,
       );
     case "short_answer":
+    case "find_error":
     case "calculation":
     case "open":
       // A model answer of a whole sentence would never match word for word, so these are graded by hand.
@@ -300,7 +302,7 @@ export function toGoogleForms(original: Sheet): Exported {
             .map(([o, ok]) => `item.createChoice(${js(o as string)}, ${ok})`)
             .join(", ")}]);`,
         );
-      } else if (section.type === "open" || section.type === "calculation") {
+      } else if (section.type === "open" || section.type === "calculation" || section.type === "find_error") {
         lines.push(`  form.addParagraphTextItem().setTitle(${js(item.prompt)}).setPoints(${points});`);
       } else {
         lines.push(`  form.addTextItem().setTitle(${js(item.prompt)}).setPoints(${points});`);

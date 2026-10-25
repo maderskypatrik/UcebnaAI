@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
   const files = form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   const url = text("url");
-  if (files.length === 0 && !url) {
+  if (files.length === 0 && !url && text("fromTopic") !== "1") {
     return Response.json({ error: "Nahrajte aspoň jeden soubor nebo vložte odkaz." }, { status: 400 });
   }
   const sections = parseSections(text("sections"));
