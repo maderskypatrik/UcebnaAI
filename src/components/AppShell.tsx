@@ -60,8 +60,14 @@ export function AppShell({
   return (
     <div className="min-h-screen">
       <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-6 sm:px-10 print:hidden">
-        <Link href="/" className="font-display text-title-lg font-bold text-primary-container">
+        <Link href="/" className="flex items-center gap-2 font-display text-title-lg font-bold text-primary-container">
           Učebna.ai
+          <span
+            title="Aplikaci zkoušíme s prvními učiteli. Za každou zpětnou vazbu děkujeme."
+            className="rounded-full bg-secondary-container px-2 py-0.5 font-sans text-label-md font-semibold text-primary-container"
+          >
+            Beta
+          </span>
         </Link>
         <nav className="flex flex-wrap items-center gap-1 text-sm">
           <NavLink href="/" active={active === "new"}>

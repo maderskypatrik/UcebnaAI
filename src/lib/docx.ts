@@ -28,6 +28,7 @@ import {
   LETTERS,
   STUDENT_LINE,
   formatPoints,
+  gradeScale,
   matchingCounterparts,
   matchingKeyLetter,
   orderingShown,
@@ -60,7 +61,7 @@ const NO_BORDERS = {
 
 const BLANK = "…………………………";
 
-type Options = { showKey: boolean; showPoints: boolean };
+type Options = { showKey: boolean; showPoints: boolean; answerSheet?: boolean };
 
 const text = (t: string, opts: IRunOptions = {}) => new TextRun({ text: t, ...opts });
 
@@ -410,7 +411,74 @@ function sectionItems(
   }
 }
 
-export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Options) {
+/** What a student marks for one item on the answer sheet, or the right answer on the marking template. */
+function answerRuns(section: Section, item: Section["items"][number], index: number, number: number, showKey: boolean): ParagraphChild[] {
+  const blank = text("……………………", { color: LINE });
+  const key = (t: string) => text(toPlain(t), { bold: true, color: PRIMARY });
+  const choices = (labels: string[], correct: string) =>
+    labels.flatMap((l) => [
+      showKey && l === correct ? text(`● ${l}`, { bold: true, color: PRIMARY }) : text(`○ ${l}`, { color: MUTED }),
+      text("   "),
+    ]);
+  switch (section.type) {
+    case "multiple_choice":
+      return choices(item.options.map((_, k) => LETTERS[k]), item.answer.trim().toUpperCase().charAt(0));
+    case "true_false":
+      return choices(["P", "N"], item.answer.trim().toUpperCase().charAt(0));
+    case "matching":
+      return [showKey ? key(matchingKeyLetter(index, section.items.length)) : text("____", { color: LINE })];
+    case "ordering":
+      return orderingShown(item, number).map((e) =>
+        showKey ? text(`[${e.position}] `, { bold: true, color: PRIMARY }) : text("[   ] ", { color: MUTED }),
+      );
+    case "calculation":
+      return [showKey ? key(item.answer.split("\n").at(-1)?.replace(/^Výsledek:\s*/i, "") ?? "") : blank];
+    case "open":
+      return [text("na listu", { color: MUTED })];
+    default:
+      return [showKey ? key(item.answer.split(" – ")[0]) : blank];
+  }
+}
+
+/** The answer sheet as its own page: students mark answers there, the key version is the marking template. */
+function answerSheetPage(sheet: Sheet, showKey: boolean): (Paragraph | Table)[] {
+  const starts = sectionStarts(sheet);
+  const out: (Paragraph | Table)[] = [
+    new Paragraph({
+      pageBreakBefore: true,
+      spacing: { after: 240 },
+      children: [text(sheet.header?.student ?? STUDENT_LINE, { size: 18, color: MUTED })],
+    }),
+    p([text(showKey ? "Šablona pro opravu" : "Záznamový arch", { bold: true, size: 32 }), text(`  · ${toPlain(sheet.title)}`, { size: 24, color: MUTED })], 240),
+  ];
+  sheet.sections.forEach((section, si) => {
+    if (section.type === "word_search") return;
+    out.push(
+      new Paragraph({
+        keepNext: true,
+        spacing: { before: 240, after: 100 },
+        children: [text(`${LETTERS[si]}   `, { bold: true, color: PRIMARY }), text(toPlain(section.title), { bold: true })],
+      }),
+    );
+    if (section.type === "crossword") {
+      out.push(p([text("Tajenka: "), showKey ? text(crossword(section.items).solution, { bold: true, color: PRIMARY }) : text("……………………", { color: LINE })], 120, 400));
+      return;
+    }
+    const rows = section.items.map(
+      (item, i) =>
+        new Paragraph({
+          tabStops: [{ type: TabStopType.LEFT, position: 560 }],
+          spacing: { after: 140 },
+          children: [text(`${starts[si] + i}.\t`, { color: MUTED }), ...answerRuns(section, item, i, starts[si] + i, showKey)],
+        }),
+    );
+    const half = Math.ceil(rows.length / 2);
+    out.push(twoColumns(rows.slice(0, half), rows.slice(half)));
+  });
+  return out;
+}
+
+export async function downloadDocx(sheet: Sheet, { showKey, showPoints, answerSheet = false }: Options) {
   const header = sheet.header ?? { meta: "", student: STUDENT_LINE };
   const starts = sectionStarts(sheet);
   const total = totalPoints(sheet);
@@ -455,6 +523,20 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
       }),
     );
   }
+  if (sheet.grades) {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { before: 120 },
+        children: [
+          text(gradeScale(total, sheet.grades), { size: sz(18), color: MUTED }),
+          text("    Známka: ____", { bold: true, size: sz(20) }),
+        ],
+      }),
+    );
+  }
+
+  if (answerSheet) children.push(...answerSheetPage(sheet, showKey));
 
   const doc = new Document({
     styles: {

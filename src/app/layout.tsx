@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Manrope } from "next/font/google";
 import { AuthProvider } from "@/components/AuthProvider";
+import { Feedback } from "@/components/Feedback";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 
@@ -26,7 +27,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${manrope.variable} ${inter.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <Feedback />
+        </AuthProvider>
       </body>
     </html>
   );

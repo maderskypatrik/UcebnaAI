@@ -14,7 +14,9 @@ import { useAuth } from "./AuthProvider";
 import {
   LETTERS,
   STUDENT_LINE,
+  DEFAULT_GRADES,
   formatPoints,
+  gradeScale,
   matchingCounterparts,
   matchingKeyLetter,
   markerOption,
@@ -1070,7 +1072,7 @@ export function Sheet({
         >
           Tisk / PDF
         </button>
-        <ExportMenu sheet={shown} showKey={showKey} showPoints={showPoints} />
+        <ExportMenu sheet={shown} showKey={showKey} showPoints={showPoints} answerSheet={isTest && answerSheet} />
         {!doc.svp && (!auth.enabled || auth.session) && (
           <button
             type="button"
@@ -1131,6 +1133,16 @@ export function Sheet({
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
         </label>
+        {isTest && (
+          <label className="flex items-center gap-2" title="Body pro známky 1 až 5 pod testem">
+            <input
+              type="checkbox"
+              checked={Boolean(doc.grades)}
+              onChange={(e) => setDoc((d) => ({ ...d, grades: e.target.checked ? DEFAULT_GRADES : undefined }))}
+            />
+            Stupnice známek
+          </label>
+        )}
         {isTest && (
           <label className="flex items-center gap-2" title="Samostatná stránka na odpovědi a šablona pro rychlou opravu">
             <input type="checkbox" checked={answerSheet} onChange={(e) => setAnswerSheet(e.target.checked)} />
@@ -1261,6 +1273,35 @@ export function Sheet({
           <p className="mt-14 break-inside-avoid text-right font-display text-title-md font-bold text-on-surface">
             Body: ______ / {formatPoints(total)}
           </p>
+        )}
+        {doc.grades && (
+          <div className="mt-3 flex flex-col items-end gap-2 break-inside-avoid">
+            <p className="text-right text-sm text-on-surface-variant">
+              {gradeScale(total, doc.grades)} <span className="ml-3 font-semibold text-on-surface">Známka: ____</span>
+            </p>
+            {editing && (
+              <p className="flex flex-wrap items-center justify-end gap-2 text-label-md text-on-surface-variant print:hidden">
+                Hranice v procentech:
+                {doc.grades.map((percent, g) => (
+                  <label key={g} className="flex items-center gap-1">
+                    {g + 1}:
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={percent}
+                      onChange={(e) => {
+                        const value = Math.min(Math.max(Number(e.target.value) || 0, 1), 100);
+                        setDoc((d) => ({ ...d, grades: d.grades?.map((p, k) => (k === g ? value : p)) }));
+                      }}
+                      className="w-14 rounded-md bg-surface-container-low px-2 py-0.5 text-on-surface"
+                    />
+                    %
+                  </label>
+                ))}
+              </p>
+            )}
+          </div>
         )}
       </article>
       </ReadOnly>
