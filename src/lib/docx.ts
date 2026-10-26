@@ -12,6 +12,10 @@ import {
   TextRun,
   WidthType,
   ImportedXmlComponent,
+  ImageRun,
+  HeightRule,
+  LineRuleType,
+  VerticalAlign,
   type IRunOptions,
   type ParagraphChild,
 } from "docx";
@@ -19,12 +23,15 @@ import katex from "katex";
 import "katex/contrib/mhchem";
 import { mml2omml } from "mathml2omml";
 import { chemRuns, chemistry, splitMath, texToPlain, toPlain } from "./rich";
+import { crossword, wordSearch } from "./puzzles";
 import {
   LETTERS,
   STUDENT_LINE,
   formatPoints,
   matchingCounterparts,
   matchingKeyLetter,
+  orderingShown,
+  pictureMarker,
   sectionPoints,
   sectionStarts,
   totalPoints,
@@ -110,7 +117,89 @@ function twoColumns(left: Paragraph[], right: Paragraph[]) {
   });
 }
 
-function sectionItems(section: Section, start: number, showKey: boolean): (Paragraph | Table)[] {
+type Picture = { data: Uint8Array; width: number; height: number };
+
+/** The picture of a picture part with its numbered marks drawn in, as Word can't lay shapes over it reliably. */
+async function markedPicture(section: Section, start: number): Promise<Picture | null> {
+  if (!section.image) return null;
+  const image = new Image();
+  image.src = section.image;
+  await image.decode();
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d")!;
+  context.drawImage(image, 0, 0);
+  const radius = Math.max(14, Math.round(canvas.width / 30));
+  context.font = `bold ${Math.round(radius * 1.1)}px Calibri, Arial, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  section.items.forEach((item, i) => {
+    const mark = pictureMarker(item);
+    if (!mark) return;
+    const x = (mark.x / 100) * canvas.width;
+    const y = (mark.y / 100) * canvas.height;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fillStyle = "#fff";
+    context.fill();
+    context.lineWidth = Math.max(2, radius / 6);
+    context.strokeStyle = `#${PRIMARY}`;
+    context.stroke();
+    context.fillStyle = `#${PRIMARY}`;
+    context.fillText(String(start + i), x, y + 1);
+  });
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+  if (!blob) return null;
+  // At most about 12 cm wide and 13 cm tall on the page, in Word's pixels.
+  const scale = Math.min(1, 460 / canvas.width, 500 / canvas.height);
+  return {
+    data: new Uint8Array(await blob.arrayBuffer()),
+    width: Math.round(canvas.width * scale),
+    height: Math.round(canvas.height * scale),
+  };
+}
+
+const CELL = 440;
+const cellBorder = (color: string, size = 4) => ({
+  top: { style: BorderStyle.SINGLE, size, color },
+  bottom: { style: BorderStyle.SINGLE, size, color },
+  left: { style: BorderStyle.SINGLE, size, color },
+  right: { style: BorderStyle.SINGLE, size, color },
+});
+const letterCell = (
+  letter: string,
+  opts: { fill?: string; bold?: boolean; color?: string; border?: string; borderSize?: number; width?: number } = {},
+) =>
+  new TableCell({
+    width: { size: opts.width ?? CELL, type: WidthType.DXA },
+    verticalAlign: VerticalAlign.CENTER,
+    borders: opts.border ? cellBorder(opts.border, opts.borderSize) : NO_BORDERS,
+    shading: opts.fill ? { type: ShadingType.CLEAR, fill: opts.fill, color: "auto" } : undefined,
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: letter ? [text(letter, { bold: opts.bold ?? true, color: opts.color })] : [],
+      }),
+    ],
+  });
+/** A table of letter boxes; a crossword's first column is wider, for the row numbers. */
+const gridTable = (rows: TableCell[][], columns: number, first = CELL) =>
+  new Table({
+    alignment: AlignmentType.CENTER,
+    width: { size: first + CELL * (columns - 1), type: WidthType.DXA },
+    columnWidths: [first, ...Array(columns - 1).fill(CELL)],
+    borders: NO_BORDERS,
+    rows: rows.map((cells) => new TableRow({ height: { value: CELL, rule: HeightRule.EXACT }, children: cells })),
+  });
+
+function sectionItems(
+  section: Section,
+  start: number,
+  showKey: boolean,
+  picture: Picture | null,
+  large: boolean,
+): (Paragraph | Table)[] {
   const n = section.items.length;
   const num = (i: number) => text(`${start + i}.\t`, { color: MUTED });
   const numbered = { tabStops: [{ type: TabStopType.LEFT, position: 480 }], indent: { left: 480, hanging: 480 } };
@@ -209,6 +298,90 @@ function sectionItems(section: Section, start: number, showKey: boolean): (Parag
               p([text("Výsledek: ", { color: MUTED }), text(BLANK, { color: LINE })], 120, 480),
             ]),
       ]);
+    case "ordering":
+      return section.items.flatMap((item, i) => [
+        new Paragraph({ ...numbered, spacing: { before: 160, after: 80 }, children: [num(i), ...rich(item.prompt, { bold: true })] }),
+        ...orderingShown(item, start + i).map((entry) =>
+          p(
+            [
+              showKey ? text(`[ ${entry.position} ]  `, { bold: true, color: PRIMARY }) : text("[     ]  ", { color: MUTED }),
+              ...rich(entry.text),
+            ],
+            60,
+            480,
+          ),
+        ),
+        ...(showKey && item.answer ? [p(answer(item.answer), 60, 480)] : []),
+      ]);
+    case "picture":
+      return [
+        ...(picture
+          ? [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                // The SVP and large-print line spacing would otherwise cut the picture to one line.
+                spacing: { after: 200, line: 240, lineRule: LineRuleType.AUTO },
+                children: [new ImageRun({ type: "jpg", data: picture.data, transformation: { width: picture.width, height: picture.height } })],
+              }),
+            ]
+          : []),
+        ...section.items.map(
+          (item, i) =>
+            new Paragraph({
+              ...numbered,
+              spacing: { after: 200 },
+              children: [num(i), ...rich(item.prompt), text("  "), ...(showKey ? answer(item.answer) : [text(BLANK, { color: LINE })])],
+            }),
+        ),
+      ];
+    case "word_search": {
+      const puzzle = wordSearch(section.items, large);
+      const found = new Set(puzzle.placed.flatMap((x) => x.cells.map(([r, c]) => `${r}-${c}`)));
+      const rows = puzzle.grid.map((row, r) =>
+        row.map((letter, c) =>
+          showKey && found.has(`${r}-${c}`)
+            ? letterCell(letter, { border: LINE, fill: "DBE4FF", color: PRIMARY })
+            : letterCell(letter, { border: LINE, bold: false }),
+        ),
+      );
+      return [
+        gridTable(rows, puzzle.grid.length),
+        new Paragraph({
+          spacing: { before: 240, after: 120 },
+          children: [text(section.items.map((item) => `☐ ${item.prompt}`).join("     "))],
+        }),
+      ];
+    }
+    case "crossword": {
+      const puzzle = crossword(section.items);
+      const rows = puzzle.rows.map((row, i) => [
+        letterCell(`${start + i}.`, { bold: false, color: MUTED, width: 2 * CELL }),
+        ...Array.from({ length: puzzle.width }, (_, k) => {
+          const at = k - row.offset;
+          if (at < 0 || at >= row.letters.length) return letterCell("");
+          const secret = k === puzzle.column;
+          return letterCell(showKey ? row.letters[at] : "", {
+            border: secret ? PRIMARY : MUTED,
+            borderSize: secret ? 12 : 4,
+            fill: secret ? "DBE4FF" : undefined,
+            color: PRIMARY,
+          });
+        }),
+      ]);
+      return [
+        gridTable(rows, puzzle.width + 1, 2 * CELL),
+        new Paragraph({ spacing: { before: 240 }, children: [] }),
+        ...section.items.map(
+          (item, i) =>
+            new Paragraph({
+              ...numbered,
+              spacing: { after: 100 },
+              children: [num(i), ...rich(item.prompt), ...(showKey ? [text("   → "), ...answer(item.answer)] : [])],
+            }),
+        ),
+        p([text("Tajenka: ", { bold: true }), showKey ? text(puzzle.solution, { bold: true, color: PRIMARY }) : text(BLANK, { color: LINE })], 120),
+      ];
+    }
     case "short_answer":
     case "open":
       return section.items.flatMap((item, i) => [
@@ -224,8 +397,9 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
   const header = sheet.header ?? { meta: "", student: STUDENT_LINE };
   const starts = sectionStarts(sheet);
   const total = totalPoints(sheet);
-  // SVP sheets print larger and with more space between lines.
-  const scale = sheet.svp ? 1.2 : 1;
+  // SVP sheets print larger and with more space between lines, sheets for the youngest larger still.
+  const scale = sheet.large ? 1.35 : sheet.svp ? 1.2 : 1;
+  const pictures = await Promise.all(sheet.sections.map((s, si) => (s.type === "picture" ? markedPicture(s, starts[si]) : null)));
   const sz = (halfPoints: number) => Math.round(halfPoints * scale);
 
   const children: (Paragraph | Table)[] = [
@@ -233,6 +407,9 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
     p([text(header.student, { size: sz(18), color: MUTED })], 360),
     p([...rich(sheet.title, { bold: true, size: sz(32) }), ...(showKey ? [text("  · klíč", { bold: true, size: sz(32), color: PRIMARY })] : [])], 80),
     p(rich(sheet.instructions, { color: MUTED }), 360),
+    ...(showKey && sheet.settings?.outcome
+      ? [p([text(`Ověřovaný výstup z RVP: ${sheet.settings.outcome}`, { size: sz(18), color: PRIMARY })], 360)]
+      : []),
   ];
 
   sheet.sections.forEach((section, si) => {
@@ -248,7 +425,7 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
         ],
       }),
       p(rich(section.instructions, { size: sz(20), color: MUTED }), 200, 400),
-      ...sectionItems(section, starts[si], showKey),
+      ...sectionItems(section, starts[si], showKey, pictures[si], Boolean(sheet.large)),
     );
   });
 
@@ -267,7 +444,7 @@ export async function downloadDocx(sheet: Sheet, { showKey, showPoints }: Option
       default: {
         document: {
           run: { font: "Calibri", size: sz(22) },
-          paragraph: sheet.svp ? { spacing: { line: 320 } } : {},
+          paragraph: sheet.svp || sheet.large ? { spacing: { line: 320 } } : {},
         },
       },
     },

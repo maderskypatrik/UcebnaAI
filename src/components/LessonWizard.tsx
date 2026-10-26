@@ -6,6 +6,8 @@ import {
   PRESETS,
   QUESTION_TYPES,
   QUESTION_TYPE_IDS,
+  THINKING_LEVELS,
+  withoutImages,
   type QuestionType,
   type SectionSpec,
   type Sheet as SheetData,
@@ -14,7 +16,7 @@ import {
 import { SCHOOL_TYPES, SUBJECTS } from "@/lib/schools";
 import { AssistantButton } from "./AssistantButton";
 import { requestGeneration, requestReplacement, requestSection } from "@/lib/client-api";
-import { formatSize, shrinkImage } from "@/lib/shrink-image";
+import { formatSize, pictureDataUrl, shrinkImage } from "@/lib/shrink-image";
 import Link from "next/link";
 import { saveLastSettings, useLastSettings } from "@/lib/last-settings";
 import { useAuth } from "./AuthProvider";
@@ -111,6 +113,8 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
   const [fileError, setFileError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
   const [difficulty, setDifficulty] = useState(template?.difficulty ?? "Střední");
+  const [thinking, setThinking] = useState(template?.thinking ?? "mix");
+  const [outcome, setOutcome] = useState(template?.outcome ?? "");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +124,9 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
   const needsLogin = auth.enabled && !auth.loading && !auth.session;
 
   const school = SCHOOL_TYPES.find((s) => s.id === schoolId);
-  const uploadBytes = files.reduce((sum, f) => sum + f.size, 0);
+  // Pictures for picture parts travel in the same request as the materials.
+  const uploadBytes =
+    files.reduce((sum, f) => sum + f.size, 0) + sections.reduce((sum, x) => sum + (x.image?.length ?? 0), 0);
   const tooBig = uploadBytes > MAX_UPLOAD_BYTES;
   const itemCount = sections.reduce((sum, x) => sum + x.count, 0);
   const pointCount = sections.reduce((sum, x) => sum + x.count * x.points, 0);
@@ -129,8 +135,17 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
   const canContinue = [
     Boolean(school && grade && subject),
     Boolean(topic && (files.length > 0 || url) && !tooBig && !preparing),
-    sections.length > 0 && itemCount <= MAX_ITEMS,
+    sections.length > 0 && itemCount <= MAX_ITEMS && !tooBig && sections.every((x) => x.type !== "picture" || x.image),
   ][step];
+  const images = files.filter((f) => f.type.startsWith("image/"));
+
+  async function choosePicture(i: number, file: File) {
+    try {
+      updateSection(i, { image: await pictureDataUrl(file) });
+    } catch {
+      setError(`Obrázek „${file.name}“ se nepodařilo otevřít. Zkuste JPEG nebo PNG.`);
+    }
+  }
 
   const updateSection = (i: number, patch: Partial<SectionSpec>) => {
     setPresetId(null);
@@ -167,6 +182,8 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
     form.set("url", url);
     form.set("difficulty", difficulty);
     form.set("sections", JSON.stringify(sections));
+    form.set("thinking", thinking);
+    form.set("outcome", outcome.trim());
     form.set("instructionLanguage", language);
     form.set("note", note);
     form.set("meta", meta);
@@ -180,8 +197,9 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
         subject,
         difficulty,
         instructionLanguage: language,
+        thinking,
         output,
-        sections,
+        sections: withoutImages(sections),
       });
       if (typeof body.left === "number") setLeft(body.left);
     } catch (e) {
@@ -496,6 +514,39 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
                 >
                   Odebrat
                 </button>
+                {sec.type === "picture" && (
+                  <div className="col-span-full flex flex-wrap items-center gap-2 text-sm text-on-surface-variant sm:col-start-2">
+                    {sec.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- a data URL chosen just now
+                      <img src={sec.image} alt="Vybraný obrázek" className="h-16 rounded-md" />
+                    ) : (
+                      <span>Vyberte obrázek, ke kterému AI napíše úlohy:</span>
+                    )}
+                    {images.map((f, k) => (
+                      <button
+                        key={`${f.name}-${k}`}
+                        type="button"
+                        onClick={() => choosePicture(i, f)}
+                        className="max-w-48 truncate rounded-lg bg-surface-container-lowest px-3 py-1.5 text-on-surface hover:bg-surface-container"
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                    <label className="cursor-pointer rounded-lg bg-surface-container-lowest px-3 py-1.5 font-medium text-primary-container hover:bg-surface-container">
+                      {images.length ? "Jiný obrázek…" : "Nahrát obrázek…"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) choosePicture(i, file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             ))}
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -517,6 +568,11 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
                 {itemCount > MAX_ITEMS && ` (nejvýš ${MAX_ITEMS} položek)`}
               </span>
             </div>
+            {tooBig && (
+              <p className="rounded-xl bg-error-container px-4 py-3 text-sm text-on-error-container">
+                Podklady a obrázky mají dohromady {formatSize(uploadBytes)}, víc než 4 MB. Odeberte některý soubor.
+              </p>
+            )}
           </fieldset>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -542,6 +598,26 @@ function Wizard({ template, remembered }: { template?: Template; remembered: boo
                 <option value="czech">česky</option>
                 <option value="subject">v jazyce předmětu</option>
               </select>
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-label-md text-on-surface-variant">Úroveň myšlení (Bloomova taxonomie)</span>
+              <select className={fieldClass} value={thinking} onChange={(e) => setThinking(e.target.value)}>
+                {THINKING_LEVELS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-label-md text-on-surface-variant">Očekávaný výstup z RVP (nepovinné)</span>
+              <input
+                className={fieldClass}
+                value={outcome}
+                maxLength={300}
+                onChange={(e) => setOutcome(e.target.value)}
+                placeholder="např. žák popíše stavbu rostlinné buňky"
+              />
             </label>
           </div>
 

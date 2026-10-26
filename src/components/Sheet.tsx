@@ -7,6 +7,8 @@ import { ExportMenu } from "./ExportMenu";
 import { MathText } from "./MathText";
 import { hasMath } from "@/lib/rich";
 import { ShareButton } from "./ShareButton";
+import { crossword, wordSearch } from "@/lib/puzzles";
+import { pictureDataUrl } from "@/lib/shrink-image";
 import { useAuth } from "./AuthProvider";
 import {
   LETTERS,
@@ -14,6 +16,9 @@ import {
   formatPoints,
   matchingCounterparts,
   matchingKeyLetter,
+  markerOption,
+  orderingShown,
+  pictureMarker,
   sectionPoints,
   sectionStarts,
   totalPoints,
@@ -116,6 +121,8 @@ type ItemProps = {
   /** Edit mode: answers can be picked and each item shows its tools. */
   editing: boolean;
   tools: (index: number) => React.ReactNode;
+  /** Large print for the youngest; their word searches run only across and down. */
+  large?: boolean;
 };
 
 function Prompt({ item, index, onItem }: { item: Item; index: number; onItem: ItemProps["onItem"] }) {
@@ -341,7 +348,9 @@ function AddSection({ onAdd }: { onAdd: (spec: SectionSpec) => Promise<void> }) 
   const [count, setCount] = useState(5);
   const [points, setPoints] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [image, setImage] = useState<string | null>(null);
   const field = "rounded-lg bg-surface-container-lowest px-2 py-1.5 text-sm text-on-surface";
+  const needsImage = type === "picture" && !image;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant print:hidden">
       <span className="font-medium text-on-surface">Přidat část:</span>
@@ -376,12 +385,28 @@ function AddSection({ onAdd }: { onAdd: (spec: SectionSpec) => Promise<void> }) 
         />
         b
       </label>
+      {type === "picture" && (
+        <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-surface-container-lowest px-3 py-1.5">
+          {image ? "Obrázek vybrán ✓" : "Vybrat obrázek…"}
+          <input
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (file) setImage(await pictureDataUrl(file));
+            }}
+          />
+        </label>
+      )}
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || needsImage}
         onClick={async () => {
           setBusy(true);
-          await onAdd({ type, count, points }).finally(() => setBusy(false));
+          await onAdd({ type, count, points, ...(type === "picture" && image && { image }) }).finally(() =>
+            setBusy(false),
+          );
         }}
         className="bg-assistant rounded-lg px-4 py-1.5 font-medium text-on-primary disabled:opacity-60"
       >
@@ -421,10 +446,288 @@ function Calculation({ section, start, showKey, onItem, tools }: ItemProps) {
   );
 }
 
+/** Shuffled entries with a box for the order; the teacher edits them in the right order. */
+function Ordering({ section, start, showKey, onItem, editing, tools }: ItemProps) {
+  const box =
+    "flex size-8 shrink-0 items-center justify-center rounded-md border border-outline-variant font-semibold text-primary-container";
+  return (
+    <ol className="flex flex-col gap-7">
+      {section.items.map((item, i) => (
+        <li key={i} className="break-inside-avoid">
+          <p className="mb-3 flex gap-2 font-medium text-on-surface">
+            <span className="flex-1">
+              {start + i}. <Prompt item={item} index={i} onItem={onItem} />
+            </span>
+            {tools(i)}
+          </p>
+          {editing ? (
+            <div className="pl-6">
+              <p className="mb-2 text-label-md text-on-surface-variant print:hidden">
+                Ve správném pořadí. Žákům se položky zamíchají.
+              </p>
+              <ol className="flex flex-col gap-1.5">
+                {item.options.map((option, k) => (
+                  <li key={k} className="flex items-center gap-2 text-body-lg text-on-surface">
+                    <span className="w-6 text-on-surface-variant">{k + 1}.</span>
+                    <span className="flex-1">
+                      <Editable
+                        value={option}
+                        onChange={(v) => onItem(i, { options: item.options.map((o, m) => (m === k ? v : o)) })}
+                      />
+                    </span>
+                    <button
+                      type="button"
+                      disabled={k === 0}
+                      title="Posunout výš"
+                      onClick={() => {
+                        const options = [...item.options];
+                        [options[k - 1], options[k]] = [options[k], options[k - 1]];
+                        onItem(i, { options });
+                      }}
+                      className="rounded-md px-2 text-on-surface-variant hover:bg-surface-container-low disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-2 pl-6">
+              {orderingShown(item, start + i).map((entry) => (
+                <li key={entry.position} className="flex items-center gap-3 text-body-lg text-on-surface">
+                  <span className={box}>{showKey ? entry.position : ""}</span>
+                  <Editable
+                    value={entry.text}
+                    onChange={(v) =>
+                      onItem(i, { options: item.options.map((o, m) => (m === entry.position - 1 ? v : o)) })
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+          {showKey && item.answer && (
+            <p className="mt-2 pl-6 text-sm text-primary-container">
+              <Editable value={item.answer} onChange={(answer) => onItem(i, { answer })} />
+            </p>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** The picture with numbered marks, which the teacher can drag, and a line for each answer. */
+function Picture({ section, start, showKey, onItem, editing, tools }: ItemProps) {
+  const frame = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<{ index: number; x: number; y: number } | null>(null);
+  const position = (e: React.PointerEvent) => {
+    const rect = frame.current!.getBoundingClientRect();
+    const clamp = (v: number) => Math.min(Math.max(v, 2), 98);
+    return { x: clamp(((e.clientX - rect.left) / rect.width) * 100), y: clamp(((e.clientY - rect.top) / rect.height) * 100) };
+  };
+  return (
+    <div className="flex flex-col gap-5">
+      {section.image ? (
+        <div
+          ref={frame}
+          className="relative mx-auto w-full max-w-xl touch-none select-none break-inside-avoid"
+          onPointerMove={(e) => drag && setDrag({ index: drag.index, ...position(e) })}
+          onPointerUp={() => {
+            if (drag) onItem(drag.index, { options: [markerOption(drag.x, drag.y)] });
+            setDrag(null);
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the sheet itself */}
+          <img src={section.image} alt="Obrázek k úlohám" draggable={false} className="block w-full rounded-lg" />
+          {section.items.map((item, i) => {
+            const mark = drag?.index === i ? drag : pictureMarker(item);
+            if (!mark) return null;
+            return (
+              <span
+                key={i}
+                onPointerDown={
+                  editing
+                    ? (e) => {
+                        e.currentTarget.parentElement?.setPointerCapture(e.pointerId);
+                        setDrag({ index: i, ...position(e) });
+                      }
+                    : undefined
+                }
+                style={{ left: `${mark.x}%`, top: `${mark.y}%` }}
+                className={`absolute flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-primary-container bg-white text-sm font-bold text-primary-container shadow ${
+                  editing ? "cursor-grab" : ""
+                }`}
+              >
+                {start + i}
+              </span>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-on-error-container">Obrázek k této části chybí.</p>
+      )}
+      {editing && section.image && (
+        <p className="text-label-md text-on-surface-variant print:hidden">
+          Čísla na obrázku přetáhněte myší nebo prstem na správné místo.
+        </p>
+      )}
+      <ol className="flex flex-col gap-4">
+        {section.items.map((item, i) => (
+          <li key={i} className="flex flex-wrap items-end gap-2 break-inside-avoid text-body-lg text-on-surface">
+            <span className="w-7 shrink-0 text-on-surface-variant">{start + i}.</span>
+            <span>
+              <Prompt item={item} index={i} onItem={onItem} />
+            </span>
+            <Blank answer={item.answer} showKey={showKey} onAnswer={(answer) => onItem(i, { answer })} />
+            {editing && (
+              <button
+                type="button"
+                onClick={() => onItem(i, { options: pictureMarker(item) ? [] : ["50,50"] })}
+                className="rounded-lg px-2 py-1 text-label-md text-on-surface-variant hover:bg-surface-container-low print:hidden"
+              >
+                {pictureMarker(item) ? "Bez značky" : "📍 Označit místo"}
+              </button>
+            )}
+            {tools(i)}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** A grid of letters with the words hidden in it; the key shows where they are. */
+function WordSearchGrid({ section, start, showKey, onItem, editing, tools, large }: ItemProps) {
+  const puzzle = useMemo(() => wordSearch(section.items, Boolean(large)), [section.items, large]);
+  const found = new Set(puzzle.placed.flatMap((p) => p.cells.map(([r, c]) => `${r}-${c}`)));
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="overflow-x-auto">
+        <div
+          className="mx-auto grid w-fit border border-outline-variant break-inside-avoid"
+          style={{ gridTemplateColumns: `repeat(${puzzle.grid.length}, minmax(0, 1fr))` }}
+        >
+          {puzzle.grid.flatMap((row, r) =>
+            row.map((letter, c) => (
+              <span
+                key={`${r}-${c}`}
+                className={`flex size-7 items-center justify-center border border-outline-variant/50 font-semibold sm:size-8 ${
+                  showKey && found.has(`${r}-${c}`)
+                    ? "bg-secondary-container text-primary-container underline print:font-black"
+                    : "text-on-surface"
+                }`}
+              >
+                {letter}
+              </span>
+            )),
+          )}
+        </div>
+      </div>
+      {puzzle.missing.length > 0 && (
+        <p className="text-sm text-on-error-container print:hidden">
+          Do mřížky se nevešlo: {puzzle.missing.join(", ")}. Zkraťte nebo smažte některé slovo.
+        </p>
+      )}
+      <ol className="flex flex-wrap gap-x-6 gap-y-2 text-body-lg text-on-surface">
+        {section.items.map((item, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <span className="inline-block size-4 rounded-sm border border-outline-variant" aria-hidden />
+            <span className="sr-only">{start + i}.</span>
+            <Prompt item={item} index={i} onItem={onItem} />
+            {showKey && item.answer && (
+              <span className="text-sm text-on-surface-variant">
+                (<Editable value={item.answer} onChange={(answer) => onItem(i, { answer })} />)
+              </span>
+            )}
+            {editing && tools(i)}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** Rows of boxes whose highlighted column spells the secret word, with the clues below. */
+function Crossword({ section, start, showKey, onItem, editing, tools }: ItemProps) {
+  const puzzle = crossword(section.items);
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="overflow-x-auto">
+        <table className="mx-auto border-separate border-spacing-0 break-inside-avoid">
+          <tbody>
+            {puzzle.rows.map((row, i) => (
+              <tr key={i}>
+                <td className="pr-2 text-right text-sm text-on-surface-variant">{start + i}.</td>
+                {Array.from({ length: puzzle.width }, (_, k) => {
+                  const at = k - row.offset;
+                  if (at < 0 || at >= row.letters.length) return <td key={k} className="size-7 sm:size-8" />;
+                  const secret = k === puzzle.column;
+                  return (
+                    <td
+                      key={k}
+                      className={`size-7 border text-center font-semibold sm:size-8 ${
+                        secret
+                          ? "border-2 border-primary-container bg-secondary-container/60 text-primary-container"
+                          : "border-outline-variant text-on-surface"
+                      }`}
+                    >
+                      {showKey ? row.letters[at] : ""}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ol className="flex flex-col gap-2.5 text-body-lg text-on-surface">
+        {section.items.map((item, i) => (
+          <li key={i} className="flex flex-wrap gap-2 break-inside-avoid">
+            <span className="w-7 shrink-0 text-on-surface-variant">{start + i}.</span>
+            <span className="flex-1">
+              <Prompt item={item} index={i} onItem={onItem} />
+              {(showKey || editing) && (
+                <span className="ml-3 font-semibold text-primary-container">
+                  → <Editable value={item.answer} onChange={(answer) => onItem(i, { answer })} />
+                </span>
+              )}
+              {editing && (
+                <span className="ml-3 text-label-md text-on-surface-variant print:hidden">
+                  písmeno tajenky:{" "}
+                  <Editable
+                    value={item.options[0] ?? ""}
+                    onChange={(letter) => onItem(i, { options: [letter.trim().slice(0, 1).toLocaleUpperCase("cs")] })}
+                    className="font-semibold text-primary-container"
+                  />
+                </span>
+              )}
+            </span>
+            {tools(i)}
+          </li>
+        ))}
+      </ol>
+      <p className="text-body-lg text-on-surface">
+        Tajenka:{" "}
+        {showKey ? (
+          <strong className="tracking-widest text-primary-container">{puzzle.solution}</strong>
+        ) : (
+          <span className="inline-block w-48 border-b border-dotted border-on-surface-variant/60" />
+        )}
+      </p>
+    </div>
+  );
+}
+
 /** A blank question of the section's type for the teacher to fill in. */
 function blankItem(type: Section["type"]): Item {
   if (type === "multiple_choice") return { prompt: "Nová otázka", options: ["…", "…", "…", "…"], answer: "A" };
   if (type === "true_false") return { prompt: "Nové tvrzení", options: [], answer: "P" };
+  if (type === "ordering") return { prompt: "Seřaď správně.", options: ["první", "druhá", "třetí", "čtvrtá"], answer: "" };
+  if (type === "picture") return { prompt: "Pojmenuj označenou část.", options: ["50,50"], answer: "odpověď" };
+  if (type === "word_search") return { prompt: "SLOVO", options: [], answer: "" };
+  if (type === "crossword") return { prompt: "Nápověda", options: ["S"], answer: "SLOVO" };
   return { prompt: "Nová položka", options: [], answer: "odpověď" };
 }
 
@@ -503,6 +806,14 @@ function SectionItems(props: ItemProps) {
       return <Written {...props} lines={6} />;
     case "calculation":
       return <Calculation {...props} />;
+    case "ordering":
+      return <Ordering {...props} />;
+    case "picture":
+      return <Picture {...props} />;
+    case "word_search":
+      return <WordSearchGrid {...props} />;
+    case "crossword":
+      return <Crossword {...props} />;
   }
 }
 
@@ -772,6 +1083,14 @@ export function Sheet({
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
         </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={Boolean(doc.large)}
+            onChange={(e) => setDoc((d) => ({ ...d, large: e.target.checked || undefined }))}
+          />
+          Velké písmo
+        </label>
         {doc.svp && (
           <span className="font-medium text-on-surface">
             Verze pro žáky se SVP: jednodušší zadání, nápovědy a větší písmo.
@@ -789,7 +1108,7 @@ export function Sheet({
 
       {/* A4 Digital Sheet */}
       <ReadOnly value={isB}>
-      <article className={`${doc.svp ? "svp-sheet " : ""}mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none`}>
+      <article className={`${doc.large ? "large-sheet " : doc.svp ? "svp-sheet " : ""}mx-auto w-full max-w-[210mm] bg-surface-container-lowest px-8 py-12 shadow-ambient sm:px-14 print:max-w-none print:p-0 print:shadow-none`}>
         <div className="mb-8 flex flex-wrap justify-between gap-4 text-label-md text-on-surface-variant">
           <Editable value={header.meta} onChange={(v) => setDoc((d) => ({ ...d, header: { ...header, meta: v } }))} />
           <Editable
@@ -805,6 +1124,9 @@ export function Sheet({
         <p className="mb-10 text-body-lg text-on-surface-variant">
           <Editable value={doc.instructions} onChange={(instructions) => setDoc((d) => ({ ...d, instructions }))} />
         </p>
+        {showKey && doc.settings?.outcome && (
+          <p className="-mt-6 mb-10 text-sm text-primary-container">Ověřovaný výstup z RVP: {doc.settings.outcome}</p>
+        )}
 
         <div className="flex flex-col gap-12">
           {shown.sections.map((section, si) => (
@@ -835,6 +1157,7 @@ export function Sheet({
                 onItem={(ii, patch) => updateItem(si, ii, patch)}
                 onSection={(patch) => updateSection(si, patch)}
                 editing={editing}
+                large={doc.large}
                 tools={(ii) =>
                   editing && (
                     <ItemTools
