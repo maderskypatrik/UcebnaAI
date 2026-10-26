@@ -164,6 +164,31 @@ export function Kabinet() {
     router.push(`/kabinet/${saved.id}`);
   }
 
+  /** A copy to adapt for another class, so the original stays as it was. */
+  async function duplicate(row: SheetRow) {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from("sheets")
+      .select("kind, meta, folder, data")
+      .eq("id", row.id)
+      .single();
+    if (error) return setError(`Test se nepodařilo načíst: ${error.message}`);
+    const title = `${row.title} (kopie)`.slice(0, 200);
+    const { data: saved, error: saveError } = await supabase
+      .from("sheets")
+      .insert({
+        kind: data.kind,
+        title,
+        meta: data.meta,
+        folder: data.folder,
+        data: { ...(data.data as SheetData), title },
+      })
+      .select(SHEET_ROW_COLUMNS)
+      .single();
+    if (saveError) return setError(`Kopii se nepodařilo uložit: ${saveError.message}`);
+    setRows((r) => (r ? [saved as SheetRow, ...r] : r));
+  }
+
   async function startSimilar(row: SheetRow) {
     const { data, error } = await getSupabase()
       .from("sheets")
@@ -338,6 +363,14 @@ export function Kabinet() {
               className="rounded-xl px-3 py-2 text-sm font-medium text-primary-container transition-colors hover:bg-secondary-container"
             >
               Podobný test
+            </button>
+            <button
+              type="button"
+              onClick={() => duplicate(row)}
+              title="Kopie, kterou můžete upravit třeba pro jinou třídu"
+              className="rounded-xl px-3 py-2 text-sm font-medium text-primary-container transition-colors hover:bg-secondary-container"
+            >
+              Duplikovat
             </button>
             <button
               type="button"

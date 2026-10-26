@@ -159,3 +159,28 @@ create policy "Teachers rate questions" on public.question_feedback
 -- from public.claude_calls
 -- group by 1, 2
 -- order by 1 desc, 2;
+
+-- Feedback from beta testers ("Zpětná vazba" in the corner of every page).
+-- Anyone may send it, signed in or not; only you read it, in the Table Editor or with the query below.
+create table if not exists public.beta_feedback (
+  id bigint generated always as identity primary key,
+  user_id uuid default auth.uid() references auth.users on delete set null,
+  kind text not null check (kind in ('bug', 'idea', 'praise')),
+  message text not null check (char_length(message) between 1 and 4000),
+  page text not null default '',
+  user_agent text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.beta_feedback enable row level security;
+
+drop policy if exists "Anyone sends feedback" on public.beta_feedback;
+create policy "Anyone sends feedback" on public.beta_feedback
+  for insert to anon, authenticated
+  with check (user_id is null or user_id = (select auth.uid()));
+
+-- Newest feedback with the sender's e-mail: paste on its own into the SQL Editor and Run.
+--
+-- select f.created_at, f.kind, u.email, f.page, f.message
+-- from public.beta_feedback f left join auth.users u on u.id = f.user_id
+-- order by f.created_at desc limit 100;

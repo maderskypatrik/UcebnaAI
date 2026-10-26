@@ -210,7 +210,28 @@ export type Sheet = {
   svp?: boolean;
   /** Large print for the youngest pupils (1. stupeň). */
   large?: boolean;
+  /** Grade scale shown under the points: the lowest percentage for grades 1, 2, 3 and 4. */
+  grades?: number[];
 };
+
+/** The usual Czech scale: 90 % for a 1, 75 % for a 2, 50 % for a 3, 30 % for a 4. */
+export const DEFAULT_GRADES = [90, 75, 50, 30];
+
+/** Lowest points for grades 1 to 4, rounded up to half a point, as teachers write them on a test. */
+export const gradeThresholds = (total: number, grades: number[]) =>
+  grades.map((percent) => Math.ceil(((total * percent) / 100) * 2) / 2);
+
+/** "1: 27–30 b · 2: 23–26,5 b · … · 5: 0–8,5 b" for the bottom of a test. */
+export function gradeScale(total: number, grades: number[]): string {
+  const low = gradeThresholds(total, grades);
+  const num = (n: number) => String(n).replace(".", ",");
+  return [...low, 0]
+    .map((from, i) => {
+      const to = i === 0 ? total : low[i - 1] - 0.5;
+      return `${i + 1}: ${to <= from ? num(from) : `${num(from)}–${num(to)}`} b`;
+    })
+    .join(" · ");
+}
 
 export type Preset = { id: string; label: string; hint: string; sections: SectionSpec[] };
 

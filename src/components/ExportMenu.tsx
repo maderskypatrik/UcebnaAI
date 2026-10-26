@@ -48,7 +48,18 @@ function save(blob: Blob, fileName: string) {
 }
 
 /** "Stáhnout" with a choice of where the test goes next, and how to get it in there. */
-export function ExportMenu({ sheet, showKey, showPoints }: { sheet: Sheet; showKey: boolean; showPoints: boolean }) {
+export function ExportMenu({
+  sheet,
+  showKey,
+  showPoints,
+  answerSheet = false,
+}: {
+  sheet: Sheet;
+  showKey: boolean;
+  showPoints: boolean;
+  /** Adds the answer sheet (or, with the key, the marking template) as the last page of the Word file. */
+  answerSheet?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [done, setDone] = useState<{ target: Exclude<Target, "word">; result: Exported; script?: string } | null>(
     null,
@@ -61,7 +72,7 @@ export function ExportMenu({ sheet, showKey, showPoints }: { sheet: Sheet; showK
     if (target === "word") {
       // Loaded on demand so the Word library doesn't slow down the first page load.
       const { downloadDocx } = await import("@/lib/docx");
-      return downloadDocx(sheet, { showKey, showPoints });
+      return downloadDocx(sheet, { showKey, showPoints, answerSheet });
     }
     const exports = await import("@/lib/exports");
     const result =
