@@ -1,4 +1,4 @@
-import type { Item, Section } from "./schemas";
+import type { Item, Section, Sheet } from "./schemas";
 import { getSupabase, supabaseConfigured } from "./supabase";
 
 /** The signed-in teacher's token for our API routes, when login is switched on. */
@@ -14,6 +14,18 @@ export async function postForm<T>(path: string, form: FormData): Promise<T> {
   const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
   if (!res.ok) throw new Error(body.error);
   return body as T;
+}
+
+/** The test rewritten for students with special educational needs; saved to the Kabinet when login is on. */
+export async function requestAdaptation(sheet: Sheet, meta: string) {
+  const res = await fetch("/api/adapt", {
+    method: "POST",
+    body: JSON.stringify({ sheet, meta }),
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+  });
+  const body = await res.json().catch(() => ({ error: "Server neodpověděl, zkuste to znovu." }));
+  if (!res.ok) throw new Error(body.error);
+  return body as { sheet: Sheet; id?: string | null; left?: number | null };
 }
 
 /** One new question from the AI; materials are sent along while the teacher still has them. */

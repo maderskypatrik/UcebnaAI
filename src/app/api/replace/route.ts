@@ -1,4 +1,4 @@
-import { authorize, errorResponse } from "@/lib/api";
+import { authorize, errorResponse, recordUsage } from "@/lib/api";
 import { replaceItem } from "@/lib/generate";
 import { QUESTION_TYPE_IDS, type Section } from "@/lib/schemas";
 
@@ -6,7 +6,7 @@ export const maxDuration = 120;
 
 /** One new question in place of one the teacher didn't like. Doesn't count toward the daily limit. */
 export async function POST(request: Request) {
-  const { error: denied } = await authorize(request);
+  const { supabase, error: denied } = await authorize(request);
   if (denied) return denied;
 
   const form = await request.formData();
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const item = await replaceItem({
+    const { item, usage } = await replaceItem({
       meta: text("meta").slice(0, 300),
       title: text("title").slice(0, 300),
       section: { ...section, items: section.items.slice(0, 60) },
@@ -31,6 +31,7 @@ export async function POST(request: Request) {
       url: text("url"),
       files: form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0),
     });
+    await recordUsage(supabase, "replace", usage);
     return Response.json({ item });
   } catch (error) {
     return errorResponse(error);

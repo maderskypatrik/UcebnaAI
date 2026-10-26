@@ -130,6 +130,8 @@ export type Sheet = {
   title: string;
   instructions: string;
   sections: Section[];
+  /** Adapted for students with special educational needs: simpler wording, larger print. */
+  svp?: boolean;
 };
 
 export type Preset = { id: string; label: string; hint: string; sections: SectionSpec[] };
