@@ -382,7 +382,24 @@ function sectionItems(
         p([text("Tajenka: ", { bold: true }), showKey ? text(puzzle.solution, { bold: true, color: PRIMARY }) : text(BLANK, { color: LINE })], 120),
       ];
     }
+    case "letters": {
+      const rows = section.items.map(
+        (item, i) =>
+          new Paragraph({
+            ...numbered,
+            spacing: { after: 200 },
+            children: [
+              num(i),
+              text(item.prompt.replace(/_/g, "▢"), { characterSpacing: 20 }),
+              ...(showKey ? [text("   → "), ...answer(item.answer)] : []),
+            ],
+          }),
+      );
+      const half = Math.ceil(n / 2);
+      return [twoColumns(rows.slice(0, half), rows.slice(half))];
+    }
     case "short_answer":
+    case "find_error":
     case "open":
       return section.items.flatMap((item, i) => [
         new Paragraph({ ...numbered, spacing: { before: 160, after: 60 }, children: [num(i), ...rich(item.prompt, { bold: true })] }),

@@ -85,6 +85,20 @@ export const QUESTION_TYPES = {
     prompt:
       "Křížovka s tajenkou: nejdřív si vymysli tajenku k tématu (jedno slovo nebo sousloví bez mezer), která má přesně tolik písmen, kolik je položek. Pro každé písmeno tajenky jedna položka: prompt = krátká nápověda nebo hádanka, answer = hledané slovo velkými písmeny bez mezer, které dané písmeno tajenky obsahuje, options = právě jedna položka s tímto písmenem tajenky (velké písmeno). Položky jdou v pořadí písmen tajenky.",
   },
+  letters: {
+    label: "Doplňování písmen",
+    hint: "i/y, s/z, mě/mně, velká písmena",
+    points: 1,
+    prompt:
+      "Doplňování písmen: prompt = slovo nebo krátká věta, ve které každé vynechané písmeno nebo skupinu písmen nahradí jedno podtržítko _ (např. „b_linkový čaj“, „_ ražský hrad“ pro velké písmeno, „zapo_enout“), answer = celé slovo nebo věta správně napsaná. Vynechávej jen místa, kde žáci dělají chyby (i/y, s/z, ě/je, mě/mně, ú/ů, velká písmena, zdvojené souhlásky). Hodí se hlavně na český a cizí jazyk. options prázdné.",
+  },
+  find_error: {
+    label: "Najdi a oprav chybu",
+    hint: "chyba v tvrzení, větě či výpočtu",
+    points: 2,
+    prompt:
+      "Najdi a oprav chybu: prompt = tvrzení, věta, krátký text nebo výpočet s právě jednou věcnou, pravopisnou nebo početní chybou, která je typická pro žáky; chybu nijak neoznačuj. answer = správná verze a za pomlčkou krátce, v čem byla chyba. options prázdné.",
+  },
   open: {
     label: "Otevřená úloha",
     hint: "delší odpověď, vysvětlení, sloh",

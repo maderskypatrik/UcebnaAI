@@ -7,6 +7,7 @@ import { ExportMenu } from "./ExportMenu";
 import { MathText } from "./MathText";
 import { hasMath } from "@/lib/rich";
 import { ShareButton } from "./ShareButton";
+import { AnswerSheet } from "./AnswerSheet";
 import { crossword, wordSearch } from "@/lib/puzzles";
 import { pictureDataUrl } from "@/lib/shrink-image";
 import { useAuth } from "./AuthProvider";
@@ -446,6 +447,47 @@ function Calculation({ section, start, showKey, onItem, tools }: ItemProps) {
   );
 }
 
+/** A word with a small box for each missing letter, written as "_" in the text. */
+function LetterGaps({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("_").map((part, k) => (
+        <span key={k}>
+          {k > 0 && (
+            <span
+              aria-label="doplň"
+              className="mx-0.5 inline-block h-[1.15em] w-[0.9em] translate-y-[0.15em] rounded-sm border border-on-surface-variant/60"
+            />
+          )}
+          {part}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Words with letters to fill in, two columns like a dictation exercise. */
+function Letters({ section, start, showKey, onItem, editing, tools }: ItemProps) {
+  return (
+    <ol className="gap-x-10 sm:columns-2 print:columns-2">
+      {section.items.map((item, i) => (
+        <li key={i} className="mb-4 flex flex-wrap items-baseline gap-2 break-inside-avoid text-body-lg text-on-surface">
+          <span className="w-7 shrink-0 text-on-surface-variant">{start + i}.</span>
+          <span className="tracking-wide">
+            {editing ? <Prompt item={item} index={i} onItem={onItem} /> : <LetterGaps text={item.prompt} />}
+          </span>
+          {showKey && (
+            <span className="font-semibold text-primary-container">
+              → <Editable value={item.answer} onChange={(answer) => onItem(i, { answer })} />
+            </span>
+          )}
+          {tools(i)}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /** Shuffled entries with a box for the order; the teacher edits them in the right order. */
 function Ordering({ section, start, showKey, onItem, editing, tools }: ItemProps) {
   const box =
@@ -724,6 +766,7 @@ function Crossword({ section, start, showKey, onItem, editing, tools }: ItemProp
 function blankItem(type: Section["type"]): Item {
   if (type === "multiple_choice") return { prompt: "Nová otázka", options: ["…", "…", "…", "…"], answer: "A" };
   if (type === "true_false") return { prompt: "Nové tvrzení", options: [], answer: "P" };
+  if (type === "letters") return { prompt: "b_lina", options: [], answer: "bylina" };
   if (type === "ordering") return { prompt: "Seřaď správně.", options: ["první", "druhá", "třetí", "čtvrtá"], answer: "" };
   if (type === "picture") return { prompt: "Pojmenuj označenou část.", options: ["50,50"], answer: "odpověď" };
   if (type === "word_search") return { prompt: "SLOVO", options: [], answer: "" };
@@ -808,6 +851,10 @@ function SectionItems(props: ItemProps) {
       return <Calculation {...props} />;
     case "ordering":
       return <Ordering {...props} />;
+    case "letters":
+      return <Letters {...props} />;
+    case "find_error":
+      return <Written {...props} lines={2} />;
     case "picture":
       return <Picture {...props} />;
     case "word_search":
@@ -911,6 +958,7 @@ export function Sheet({
   const total = totalPoints(doc);
   const [editingOn, setEditing] = useState(false);
   const [twoVariants, setTwoVariants] = useState(false);
+  const [answerSheet, setAnswerSheet] = useState(false);
   const [variant, setVariant] = useState<"A" | "B">("A");
   const isB = twoVariants && variant === "B";
   const editing = editingOn && !isB;
@@ -1083,6 +1131,12 @@ export function Sheet({
           <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} />
           Body u částí
         </label>
+        {isTest && (
+          <label className="flex items-center gap-2" title="Samostatná stránka na odpovědi a šablona pro rychlou opravu">
+            <input type="checkbox" checked={answerSheet} onChange={(e) => setAnswerSheet(e.target.checked)} />
+            Záznamový arch
+          </label>
+        )}
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -1210,6 +1264,7 @@ export function Sheet({
         )}
       </article>
       </ReadOnly>
+      {isTest && answerSheet && <AnswerSheet sheet={shown} showKey={showKey} />}
       {isB && (
         <p className="text-center text-label-md text-on-surface-variant print:hidden">
           Varianta B má otázky i možnosti v jiném pořadí. Upravuje se varianta A, B se podle ní přepočítá.
