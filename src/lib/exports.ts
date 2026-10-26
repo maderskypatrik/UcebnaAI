@@ -1,11 +1,37 @@
 import JSZip from "jszip";
+import { chemistry, splitMath, texToPlain, toPlain } from "./rich";
 import { LETTERS, matchingCounterparts, type Item, type Section, type Sheet } from "./schemas";
+
+/** The sheet with every piece of text passed through `change`, e.g. formulas made plain. */
+function mapText(sheet: Sheet, change: (text: string) => string): Sheet {
+  return {
+    ...sheet,
+    title: change(sheet.title),
+    instructions: change(sheet.instructions),
+    sections: sheet.sections.map((s) => ({
+      ...s,
+      title: change(s.title),
+      instructions: change(s.instructions),
+      items: s.items.map((item) => ({
+        prompt: change(item.prompt),
+        options: item.options.map(change),
+        answer: change(item.answer),
+      })),
+    })),
+  };
+}
+
+/** Moodle typesets \(…\) with its MathJax filter; chemistry goes as Unicode text, which needs no filter. */
+const moodleMath = (text: string) =>
+  splitMath(text)
+    .map((p) => (p.type === "text" ? p.value : chemistry(p.tex) !== null ? texToPlain(p.tex) : `\\(${p.tex}\\)`))
+    .join("");
 
 /** Exports to other tools. Each returns a file and how many questions made it in. */
 export type Exported = { blob: Blob; fileName: string; count: number; skipped: number };
 
 const BLANK = /_{3,}/;
-const baseName = (sheet: Sheet) => sheet.title.replace(/[\\/:*?"<>|]/g, "").trim() || "test";
+const baseName = (sheet: Sheet) => toPlain(sheet.title).replace(/[\\/:*?"<>|]/g, "").trim() || "test";
 const textBlob = (text: string) => new Blob([text], { type: "text/plain;charset=utf-8" });
 
 const correctLetter = (item: Item) => item.answer.trim().toUpperCase().charAt(0);
@@ -53,6 +79,7 @@ function giftSection(section: Section, start: number): string[] {
             .join(" ")}}`,
       );
     case "short_answer":
+    case "calculation":
     case "open":
       // A model answer of a whole sentence would never match word for word, so these are graded by hand.
       return section.items.map((item, i) => `${name(i)}${gift(item.prompt)} {}`);
@@ -60,7 +87,8 @@ function giftSection(section: Section, start: number): string[] {
 }
 
 /** A GIFT file for Moodle: Question bank → Import → GIFT format. */
-export function toMoodle(sheet: Sheet): Exported {
+export function toMoodle(original: Sheet): Exported {
+  const sheet = mapText(original, moodleMath);
   let start = 1;
   const questions: string[] = [];
   for (const section of sheet.sections) {
@@ -79,7 +107,8 @@ export function toMoodle(sheet: Sheet): Exported {
 // ── Quizlet ─────────────────────────────────────────────────────────────────
 
 /** Term and definition per line, separated by a tab: Quizlet → Create → Import. */
-export function toQuizlet(sheet: Sheet): Exported {
+export function toQuizlet(original: Sheet): Exported {
+  const sheet = mapText(original, toPlain);
   const lines: string[] = [];
   let skipped = 0;
   for (const section of sheet.sections) {
@@ -88,6 +117,7 @@ export function toQuizlet(sheet: Sheet): Exported {
       if (section.type === "multiple_choice") lines.push(`${clean(item.prompt)}\t${clean(item.options[correctIndex(item)] ?? "")}`);
       else if (section.type === "true_false") lines.push(`${clean(item.prompt)}\t${isTrue(item) ? "Pravda" : "Nepravda"}`);
       else if (section.type === "open") skipped++;
+      else if (section.type === "calculation") lines.push(`${clean(item.prompt)}\t${clean(item.answer.split("\n").at(-1) ?? "")}`);
       else lines.push(`${clean(item.prompt)}\t${clean(item.answer)}`);
     }
   }
@@ -143,7 +173,8 @@ async function xlsx(rows: (string | number | null)[][]): Promise<Blob> {
  * A spreadsheet in the layout of Kahoot's quiz template (Create → Import spreadsheet).
  * Kahoot only takes questions with answers to pick, so other question types are left out.
  */
-export async function toKahoot(sheet: Sheet): Promise<Exported> {
+export async function toKahoot(original: Sheet): Promise<Exported> {
+  const sheet = mapText(original, toPlain);
   const rows: (string | number | null)[][] = [];
   let skipped = 0;
   const cut = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
@@ -188,7 +219,8 @@ export async function toKahoot(sheet: Sheet): Promise<Exported> {
  * An Apps Script that builds the test as a Google Forms quiz in the teacher's own Drive.
  * Closed questions get their correct answers; written ones are scored by hand in Forms.
  */
-export function toGoogleForms(sheet: Sheet): Exported {
+export function toGoogleForms(original: Sheet): Exported {
+  const sheet = mapText(original, toPlain);
   const js = (t: string) => JSON.stringify(t);
   const lines: string[] = [
     `// Učebna.ai: ${sheet.title}`,
@@ -229,7 +261,7 @@ export function toGoogleForms(sheet: Sheet): Exported {
             .map(([o, ok]) => `item.createChoice(${js(o as string)}, ${ok})`)
             .join(", ")}]);`,
         );
-      } else if (section.type === "open") {
+      } else if (section.type === "open" || section.type === "calculation") {
         lines.push(`  form.addParagraphTextItem().setTitle(${js(item.prompt)}).setPoints(${points});`);
       } else {
         lines.push(`  form.addTextItem().setTitle(${js(item.prompt)}).setPoints(${points});`);

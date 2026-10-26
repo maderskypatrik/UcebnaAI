@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Manrope } from "next/font/google";
 import { AuthProvider } from "@/components/AuthProvider";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 const manrope = Manrope({
